@@ -37,8 +37,7 @@ export async function POST(request: Request) {
       if (!response.ok) {
         const errorData = await response.json()
         console.error("Google Speech-to-Text error:", errorData)
-        // Return fallback instead of throwing
-        return Response.json({ transcript: "I shared my thoughts and reflections in this session." })
+        return Response.json({ transcript: "" })
       }
 
       const data = await response.json()
@@ -47,15 +46,15 @@ export async function POST(request: Request) {
         const transcript = data.results.map((result: any) => result.alternatives[0].transcript).join(" ")
         return Response.json({ transcript })
       } else {
-        return Response.json({ transcript: "I shared my thoughts in this reflection session." })
+        return Response.json({ transcript: "" })
       }
     }
 
     // Fallback for other services or if Google fails
-    return Response.json({ transcript: "I shared my thoughts and reflections in this session." })
+    return Response.json({ transcript: "" })
   } catch (error) {
     console.error("Transcription error:", error)
     // Always return a fallback response instead of error
-    return Response.json({ transcript: "I shared my thoughts and reflections in this session." })
+    return Response.json({ transcript: "" })
   }
 }

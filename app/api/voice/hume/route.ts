@@ -1,6 +1,6 @@
 export async function POST(request: Request) {
   try {
-    const { text, apiKey } = await request.json()
+    const { text, apiKey, voice = "ITO" } = await request.json()
 
     // Hume.ai TTS integration
     const response = await fetch("https://api.hume.ai/v0/evi/chat", {
@@ -14,7 +14,7 @@ export async function POST(request: Request) {
         config: {
           voice: {
             provider: "HUME_AI",
-            name: "ITO",
+            name: voice,
           },
         },
       }),

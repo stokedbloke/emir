@@ -104,6 +104,9 @@ export default function TalkToMyself() {
   const recognitionRef = useRef<any>(null)
   const isRecordingRef = useRef(false)
 
+  const [liveTranscript, setLiveTranscript] = useState("");
+  const [showLiveTranscript, setShowLiveTranscript] = useState(true);
+
   // Save settings based on storage preference
   useEffect(() => {
     if (typeof window !== "undefined" && settings.storageMode !== "memory") {
@@ -283,6 +286,7 @@ export default function TalkToMyself() {
         }
       }
     }
+    setLiveTranscript("");
   }
 
   const startSpeechRecognition = () => {
@@ -299,22 +303,22 @@ export default function TalkToMyself() {
     ;(window as any).lastRecognitionTranscript = ""
 
     recognitionRef.current.onresult = (event: any) => {
-      if (!isRecordingRef.current) return
+      if (!isRecordingRef.current) return;
 
-      let finalTranscript = ""
-      let interimTranscript = ""
+      let finalTranscript = "";
+      let interimTranscript = "";
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript
+        const transcript = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
-          finalTranscript += transcript + " "
+          finalTranscript += transcript + " ";
         } else {
-          interimTranscript += transcript
+          interimTranscript += transcript;
         }
       }
 
-      if (finalTranscript) {
-        ;(window as any).lastRecognitionTranscript = ((window as any).lastRecognitionTranscript || "") + finalTranscript
+      if (showLiveTranscript) {
+        setLiveTranscript(((window as any).lastRecognitionTranscript || "") + finalTranscript + interimTranscript);
       }
 
       const allTranscript = (finalTranscript + interimTranscript).toLowerCase().trim()
@@ -456,7 +460,14 @@ export default function TalkToMyself() {
       setProgress(25)
 
       const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm;codecs=opus" })
-      const transcript = await transcribeAudio(audioBlob)
+      const transcript = (await transcribeAudio(audioBlob)).trim()
+      console.log("Transcript:", transcript);
+      if (!transcript || transcript.trim() === "") {
+        setIsProcessing(false);
+        setProcessingStage("");
+        setProgress(0);
+        return;
+      }
 
       setProcessingStage("Analyzing your voice patterns...")
       setProgress(50)
@@ -466,7 +477,20 @@ export default function TalkToMyself() {
       setProcessingStage("Creating your personalized summary...")
       setProgress(75)
 
-      const summary = await generateSummary(transcript)
+      const summary = (await generateSummary(transcript)).trim()
+      const lowerSummary = summary.toLowerCase();
+      if (
+        !summary ||
+        lowerSummary.includes("please provide the personal share you would like me to summarize") ||
+        lowerSummary.includes("provide a personal share") ||
+        lowerSummary.includes("please share") ||
+        lowerSummary.includes("i need the text of the share")
+      ) {
+        setIsProcessing(false);
+        setProcessingStage("");
+        setProgress(0);
+        return;
+      }
 
       setProcessingStage("Understanding emotional patterns...")
       setProgress(90)
@@ -506,7 +530,6 @@ export default function TalkToMyself() {
 
       if (googleApiKey) {
         console.log("Using Google Speech-to-Text API for transcription...")
-
         const formData = new FormData()
         formData.append("audio", audioBlob, "recording.webm")
         formData.append("apiKey", googleApiKey)
@@ -524,12 +547,30 @@ export default function TalkToMyself() {
 
           clearTimeout(timeoutId)
 
+          console.log("Google API response status:", response.status)
+
           if (response.ok) {
             const data = await response.json()
-            console.log("Google transcription successful:", data.transcript)
-            return data.transcript
+            console.log("Google transcription result:", data)
+            console.log("Google STT raw response:", data)
+
+            // Only use Google transcript if it is non-empty and not the fallback
+            if (
+              data.transcript &&
+              data.transcript.trim() !== "" &&
+              data.transcript !== "I shared my thoughts and reflections in this session."
+            ) {
+              return data.transcript;
+            }
+            // Otherwise, try browser transcript
+            if ((window as any).lastRecognitionTranscript) {
+              console.log("Google transcript empty, using browser transcript:", (window as any).lastRecognitionTranscript);
+              return (window as any).lastRecognitionTranscript.trim();
+            }
+            return ""; // No transcript
           } else {
-            console.log("Google transcription failed, falling back to browser speech recognition")
+            const errorText = await response.text()
+            console.error("Google transcription failed:", errorText)
           }
         } catch (fetchError) {
           console.log("Google transcription request failed:", fetchError)
@@ -542,10 +583,11 @@ export default function TalkToMyself() {
         return (window as any).lastRecognitionTranscript.trim()
       }
 
-      return "I shared my thoughts and reflections during this session."
+      console.warn("No transcript available, returning fallback.")
+      return "" // No transcript
     } catch (error) {
       console.error("Transcription error:", error)
-      return "I shared my thoughts and reflections in this session."
+      return "" // No transcript
     }
   }
 
@@ -648,7 +690,7 @@ export default function TalkToMyself() {
     } catch (error) {
       console.error("Summary generation error:", error)
       // Fallback with actual transcript content
-      return `I hear you sharing: "${transcript.substring(0, 100)}..." Your authentic expression is a gift to yourself and shows real courage in self-reflection.`
+      return `I hear you sharing: "${transcript.substring(0, 100)}..."`
     }
   }
 
@@ -679,33 +721,130 @@ export default function TalkToMyself() {
     ]
   }
 
-  const speakSummary = async (summary: string) => {
-    if ("speechSynthesis" in window) {
-      speechSynthesis.cancel()
-      setIsSpeaking(true)
-      setIsPaused(false)
+  const [selectedElevenLabsVoice, setSelectedElevenLabsVoice] = useState<string>("pNInz6obpgDQGcFmaJgB");
+  const [elevenLabsVoices, setElevenLabsVoices] = useState<{id: string, name: string}[]>([]);
+  const [selectedGoogleLang, setSelectedGoogleLang] = useState<string>("en-US");
+  const [selectedGoogleGender, setSelectedGoogleGender] = useState<string>("FEMALE");
+  const [selectedHumeVoice, setSelectedHumeVoice] = useState<string>("ITO");
 
-      const utterance = new SpeechSynthesisUtterance(summary)
-      setUtteranceRef(utterance)
-      utterance.rate = 0.75
-      utterance.pitch = 0.95
-      utterance.volume = 0.8
+  // Fetch ElevenLabs voices if API key is present
+  useEffect(() => {
+    const fetchVoices = async () => {
+      if (settings.elevenlabsKey) {
+        try {
+          const res = await fetch("https://api.elevenlabs.io/v1/voices", {
+            headers: { "xi-api-key": settings.elevenlabsKey }
+          });
+          if (res.ok) {
+            const data = await res.json();
+            setElevenLabsVoices(data.voices.map((v: any) => ({ id: v.voice_id, name: v.name })));
+            if (data.voices.length > 0) setSelectedElevenLabsVoice(data.voices[0].voice_id);
+          }
+        } catch (e) {
+          console.warn("Failed to fetch ElevenLabs voices", e);
+        }
+      }
+    };
+    fetchVoices();
+  }, [settings.elevenlabsKey]);
+
+  const speakSummary = async (summary: string) => {
+    const playAudioBlob = (blob: Blob) => {
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      setIsSpeaking(true);
+      setIsPaused(false);
+      audio.onended = () => {
+        setIsSpeaking(false);
+        setIsPaused(false);
+        setUtteranceRef(null);
+        URL.revokeObjectURL(url);
+      };
+      audio.onerror = () => {
+        setIsSpeaking(false);
+        setIsPaused(false);
+        setUtteranceRef(null);
+        URL.revokeObjectURL(url);
+      };
+      audio.play();
+    };
+    if (settings.voiceService === "elevenlabs" && settings.elevenlabsKey) {
+      try {
+        const response = await fetch("/api/voice/elevenlabs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: summary, apiKey: settings.elevenlabsKey, voiceId: selectedElevenLabsVoice }),
+        });
+        if (!response.ok) throw new Error("Failed to fetch ElevenLabs audio");
+        const audioBlob = await response.blob();
+        playAudioBlob(audioBlob);
+        return;
+      } catch (err) {
+        console.warn("Falling back to browser TTS: ElevenLabs TTS error:", err);
+      }
+    } else if (settings.voiceService === "hume" && settings.humeKey) {
+      try {
+        const response = await fetch("/api/voice/hume", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: summary, apiKey: settings.humeKey, voice: selectedHumeVoice }),
+        });
+        if (!response.ok) throw new Error("Failed to fetch Hume audio");
+        const audioBlob = await response.blob();
+        playAudioBlob(audioBlob);
+        return;
+      } catch (err) {
+        console.warn("Falling back to browser TTS: Hume TTS error:", err);
+      }
+    } else if (settings.voiceService === "google" && settings.geminiKey) {
+      try {
+        const response = await fetch("/api/voice/google", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: summary, apiKey: settings.geminiKey, languageCode: selectedGoogleLang, gender: selectedGoogleGender }),
+        });
+        if (!response.ok) throw new Error("Failed to fetch Google TTS audio");
+        const data = await response.json();
+        if (data.audioContent) {
+          const audioBlob = new Blob([
+            Uint8Array.from(atob(data.audioContent), c => c.charCodeAt(0))
+          ], { type: "audio/mp3" });
+          playAudioBlob(audioBlob);
+          return;
+        } else {
+          throw new Error("No audio content from Google TTS");
+        }
+      } catch (err) {
+        console.warn("Falling back to browser TTS: Google TTS error:", err);
+      }
+    }
+    // Default: Browser TTS
+    console.info("Using browser/system TTS");
+    if ("speechSynthesis" in window) {
+      speechSynthesis.cancel();
+      setIsSpeaking(true);
+      setIsPaused(false);
+
+      const utterance = new SpeechSynthesisUtterance(summary);
+      setUtteranceRef(utterance);
+      utterance.rate = 0.75;
+      utterance.pitch = 0.95;
+      utterance.volume = 0.8;
 
       utterance.onend = () => {
-        setIsSpeaking(false)
-        setIsPaused(false)
-        setUtteranceRef(null)
-      }
+        setIsSpeaking(false);
+        setIsPaused(false);
+        setUtteranceRef(null);
+      };
 
       utterance.onerror = () => {
-        setIsSpeaking(false)
-        setIsPaused(false)
-        setUtteranceRef(null)
-      }
+        setIsSpeaking(false);
+        setIsPaused(false);
+        setUtteranceRef(null);
+      };
 
       const loadVoices = () => {
-        const voices = speechSynthesis.getVoices()
-
+        const voices = speechSynthesis.getVoices();
         const preferredVoice =
           voices.find(
             (voice) =>
@@ -715,19 +854,16 @@ export default function TalkToMyself() {
               voice.name.includes("Tessa") ||
               (voice.name.includes("Google") && voice.name.includes("US")) ||
               (voice.name.includes("Microsoft") && voice.name.includes("Aria")),
-          ) || voices.find((voice) => voice.lang.includes("en-US"))
-
+          ) || voices.find((voice) => voice.lang.includes("en-US"));
         if (preferredVoice) {
-          utterance.voice = preferredVoice
+          utterance.voice = preferredVoice;
         }
-
-        speechSynthesis.speak(utterance)
-      }
-
+        speechSynthesis.speak(utterance);
+      };
       if (speechSynthesis.getVoices().length > 0) {
-        loadVoices()
+        loadVoices();
       } else {
-        speechSynthesis.onvoiceschanged = loadVoices
+        speechSynthesis.onvoiceschanged = loadVoices;
       }
     }
   }
@@ -1146,6 +1282,23 @@ export default function TalkToMyself() {
                   </div>
                 </CardContent>
               </Card>
+              {currentSession && (
+                <div className="flex items-center space-x-2 mt-2">
+                  <Badge variant="secondary">
+                    TTS: {settings.voiceService.charAt(0).toUpperCase() + settings.voiceService.slice(1)}
+                    {settings.voiceService === "elevenlabs" && elevenLabsVoices.find(v => v.id === selectedElevenLabsVoice) && (
+                      <> - {elevenLabsVoices.find(v => v.id === selectedElevenLabsVoice)?.name}</>
+                    )}
+                    {settings.voiceService === "google" && (
+                      <> - {selectedGoogleLang} / {selectedGoogleGender}</>
+                    )}
+                    {settings.voiceService === "hume" && (
+                      <> - {selectedHumeVoice}</>
+                    )}
+                    {settings.voiceService === "browser" && <> - System Voice</>}
+                  </Badge>
+                </div>
+              )}
             </TabsContent>
           )}
 
@@ -1244,7 +1397,7 @@ export default function TalkToMyself() {
           )}
 
           {/* Transcript Tab */}
-          {currentSession && (
+          {currentSession && currentSession.transcript && (
             <TabsContent value="transcript" className="space-y-8">
               <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
                 <CardHeader className="bg-gradient-to-r from-gray-50 to-slate-50 p-8">
@@ -1272,7 +1425,7 @@ export default function TalkToMyself() {
           )}
 
           {/* History Tab */}
-          {sessions.length > 0 && (
+          {sessions.filter(s => s.transcript).length > 0 && (
             <TabsContent value="history" className="space-y-8">
               <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
                 <CardHeader className="bg-gradient-to-r from-amber-50 to-orange-50 p-8">
@@ -1288,7 +1441,7 @@ export default function TalkToMyself() {
                 </CardHeader>
                 <CardContent className="p-8">
                   <div className="space-y-6">
-                    {sessions.map((session, index) => (
+                    {sessions.filter(s => s.transcript).map((session, index) => (
                       <div
                         key={session.id}
                         className={cn(
@@ -1314,9 +1467,12 @@ export default function TalkToMyself() {
                                 })}
                               </span>
                             </div>
-                            <p className="text-gray-700 leading-relaxed line-clamp-3">
-                              {session.summary.substring(0, 200)}...
-                            </p>
+                            <div className="text-gray-500 text-xs mt-2">
+                              <strong>Transcript:</strong> {session.transcript}
+                            </div>
+                            <div className="text-gray-700 mt-1">
+                              <strong>Summary:</strong> {session.summary}
+                            </div>
                           </div>
                           <div className="flex flex-wrap gap-2 ml-6">
                             {session.emotions.slice(0, 3).map((emotion, emotionIndex) => (
@@ -1343,7 +1499,7 @@ export default function TalkToMyself() {
             <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
               <CardHeader className="bg-gradient-to-r from-blue-50 to-indigo-50 p-8">
                 <CardTitle className="text-2xl text-gray-800 flex items-center space-x-3">
-                  <div className="w-8 h-8 bg-gradient-to-br from-blue-400 to-indigo-500 rounded-lg flex items-center justify-center">
+                  <div className="w-8 h-8 bg-gradient-to-br from-blue-400 to-indigo-500 rounded-lg flex items-center justify-center flex-shrink-0">
                     <Settings className="w-4 h-4 text-white" />
                   </div>
                   <span>Personalize Your Experience</span>
@@ -1553,15 +1709,93 @@ export default function TalkToMyself() {
                     <div className="space-y-3">
                       <label className="text-lg font-medium text-gray-700">Voice Service</label>
                       <p className="text-sm text-gray-500">Choose how you'd like to hear your summaries</p>
-                      <select
-                        value={settings.voiceService}
-                        onChange={(e) => setSettings((prev) => ({ ...prev, voiceService: e.target.value }))}
-                        className="w-full p-4 border border-gray-300 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white/80"
-                      >
-                        <option value="browser">Browser Voice (Free)</option>
-                        <option value="elevenlabs">ElevenLabs (Premium)</option>
-                        <option value="hume">Hume.ai (Premium)</option>
-                      </select>
+                      {/* Toggle for available TTS providers */}
+                      <div className="flex space-x-2 mb-2">
+                        {settings.elevenlabsKey && (
+                          <Button
+                            variant={settings.voiceService === "elevenlabs" ? "default" : "outline"}
+                            onClick={() => setSettings((prev: any) => ({ ...prev, voiceService: "elevenlabs" }))}
+                          >
+                            ElevenLabs
+                          </Button>
+                        )}
+                        {settings.humeKey && (
+                          <Button
+                            variant={settings.voiceService === "hume" ? "default" : "outline"}
+                            onClick={() => setSettings((prev: any) => ({ ...prev, voiceService: "hume" }))}
+                          >
+                            Hume.ai
+                          </Button>
+                        )}
+                        {settings.geminiKey && (
+                          <Button
+                            variant={settings.voiceService === "google" ? "default" : "outline"}
+                            onClick={() => setSettings((prev: any) => ({ ...prev, voiceService: "google" }))}
+                          >
+                            Google TTS
+                          </Button>
+                        )}
+                        <Button
+                          variant={settings.voiceService === "browser" ? "default" : "outline"}
+                          onClick={() => setSettings((prev: any) => ({ ...prev, voiceService: "browser" }))}
+                        >
+                          Browser
+                        </Button>
+                      </div>
+                      {/* Per-provider voice selection */}
+                      {settings.voiceService === "elevenlabs" && settings.elevenlabsKey && (
+                        <div className="space-y-1">
+                          <label className="text-sm font-medium text-gray-600">ElevenLabs Voice</label>
+                          <select
+                            value={selectedElevenLabsVoice}
+                            onChange={e => setSelectedElevenLabsVoice(e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-xl"
+                          >
+                            {elevenLabsVoices.map(v => (
+                              <option key={v.id} value={v.id}>{v.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                      {settings.voiceService === "google" && settings.geminiKey && (
+                        <div className="space-y-1">
+                          <label className="text-sm font-medium text-gray-600">Google TTS Language</label>
+                          <select
+                            value={selectedGoogleLang}
+                            onChange={e => setSelectedGoogleLang(e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-xl"
+                          >
+                            <option value="en-US">English (US)</option>
+                            <option value="en-GB">English (UK)</option>
+                            <option value="es-ES">Spanish (Spain)</option>
+                            <option value="fr-FR">French</option>
+                            {/* Add more as needed */}
+                          </select>
+                          <label className="text-sm font-medium text-gray-600">Google TTS Gender</label>
+                          <select
+                            value={selectedGoogleGender}
+                            onChange={e => setSelectedGoogleGender(e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-xl"
+                          >
+                            <option value="FEMALE">Female</option>
+                            <option value="MALE">Male</option>
+                            <option value="NEUTRAL">Neutral</option>
+                          </select>
+                        </div>
+                      )}
+                      {settings.voiceService === "hume" && settings.humeKey && (
+                        <div className="space-y-1">
+                          <label className="text-sm font-medium text-gray-600">Hume Voice</label>
+                          <select
+                            value={selectedHumeVoice}
+                            onChange={e => setSelectedHumeVoice(e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-xl"
+                          >
+                            <option value="ITO">ITO</option>
+                            {/* Add more Hume voices if available */}
+                          </select>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
