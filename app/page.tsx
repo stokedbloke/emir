@@ -112,6 +112,8 @@ export default function TalkToMyself() {
 
   const [serviceStatus, setServiceStatus] = useState({ huggingface: false, google: false });
 
+  const [actualTTSService, setActualTTSService] = useState<string>("browser");
+
   useEffect(() => {
     fetch('/api/status')
       .then(res => res.json())
@@ -804,12 +806,14 @@ export default function TalkToMyself() {
         });
         if (!response.ok) throw new Error("Failed to fetch ElevenLabs audio");
         const audioBlob = await response.blob();
+        setActualTTSService("elevenlabs");
         playAudioBlob(audioBlob);
         return;
       } catch (err) {
         console.warn("Falling back to browser TTS: ElevenLabs TTS error:", err);
       }
-    } else if (settings.voiceService === "hume") {
+    }
+    if (settings.voiceService === "hume") {
       try {
         const response = await fetch("/api/voice/hume", {
           method: "POST",
@@ -818,12 +822,14 @@ export default function TalkToMyself() {
         });
         if (!response.ok) throw new Error("Failed to fetch Hume audio");
         const audioBlob = await response.blob();
+        setActualTTSService("hume");
         playAudioBlob(audioBlob);
         return;
       } catch (err) {
         console.warn("Falling back to browser TTS: Hume TTS error:", err);
       }
-    } else if (settings.voiceService === "google") {
+    }
+    if (settings.voiceService === "google") {
       try {
         const response = await fetch("/api/voice/google", {
           method: "POST",
@@ -836,6 +842,7 @@ export default function TalkToMyself() {
           const audioBlob = new Blob([
             Uint8Array.from(atob(data.audioContent), c => c.charCodeAt(0))
           ], { type: "audio/mp3" });
+          setActualTTSService("google");
           playAudioBlob(audioBlob);
           return;
         } else {
@@ -846,30 +853,27 @@ export default function TalkToMyself() {
       }
     }
     // Default: Browser TTS
-    console.info("Using browser/system TTS");
+    setActualTTSService("browser");
+    // ...browser TTS code...
     if ("speechSynthesis" in window) {
       speechSynthesis.cancel();
       setIsSpeaking(true);
       setIsPaused(false);
-
       const utterance = new SpeechSynthesisUtterance(summary);
       setUtteranceRef(utterance);
       utterance.rate = 0.75;
       utterance.pitch = 0.95;
       utterance.volume = 0.8;
-
       utterance.onend = () => {
         setIsSpeaking(false);
         setIsPaused(false);
         setUtteranceRef(null);
       };
-
       utterance.onerror = () => {
         setIsSpeaking(false);
         setIsPaused(false);
         setUtteranceRef(null);
       };
-
       const loadVoices = () => {
         const voices = speechSynthesis.getVoices();
         const preferredVoice =
@@ -1333,7 +1337,10 @@ export default function TalkToMyself() {
               {currentSession && (
                 <div className="flex items-center space-x-2 mt-2">
                   <Badge variant="secondary">
-                    TTS: {settings.voiceService.charAt(0).toUpperCase() + settings.voiceService.slice(1)}
+                    TTS: {actualTTSService === "elevenlabs" ? "ElevenLabs"
+                      : actualTTSService === "hume" ? "Hume.ai"
+                      : actualTTSService === "google" ? "Google TTS"
+                      : "Browser"}
                     {settings.voiceService === "elevenlabs" && elevenLabsVoices.find(v => v.id === selectedElevenLabsVoice) && (
                       <> - {elevenLabsVoices.find(v => v.id === selectedElevenLabsVoice)?.name}</>
                     )}
