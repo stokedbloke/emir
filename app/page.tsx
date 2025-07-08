@@ -26,6 +26,7 @@ import {
   Play,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { useToast } from "@/components/ui/use-toast"
 
 interface VocalCharacteristics {
   tone: string
@@ -106,6 +107,11 @@ export default function TalkToMyself() {
 
   const [liveTranscript, setLiveTranscript] = useState("");
   const [showLiveTranscript, setShowLiveTranscript] = useState(true);
+
+  const { toast } = useToast();
+
+  // At the top of your component:
+  const fullRecognitionTranscriptRef = useRef("");
 
   // Save settings based on storage preference
   useEffect(() => {
@@ -246,21 +252,44 @@ export default function TalkToMyself() {
     }
 
     audioChunksRef.current = []
+    console.log("Starting MediaRecorder with stream:", streamRef.current)
+    console.log("Stream tracks:", streamRef.current.getTracks())
+    console.log("Audio tracks:", streamRef.current.getAudioTracks())
+    
     mediaRecorderRef.current = new MediaRecorder(streamRef.current, {
       mimeType: "audio/webm;codecs=opus",
     })
 
     mediaRecorderRef.current.ondataavailable = (event) => {
+      console.log("MediaRecorder ondataavailable:", event.data.size, "bytes")
       if (event.data.size > 0) {
         audioChunksRef.current.push(event.data)
+        console.log("Added audio chunk, total chunks:", audioChunksRef.current.length)
+      } else {
+        console.warn("Received empty audio chunk")
       }
     }
 
     mediaRecorderRef.current.onstop = processAudio
-    mediaRecorderRef.current.start()
-    setIsRecording(true)
-    isRecordingRef.current = true
-    playChime("start")
+    try {
+      mediaRecorderRef.current.start()
+      console.log("MediaRecorder started successfully")
+      setIsRecording(true)
+      isRecordingRef.current = true
+      playChime("start")
+    } catch (err) {
+      console.error("Failed to start MediaRecorder:", err)
+      setIsRecording(false)
+      isRecordingRef.current = false
+      toast({
+        title: "Could not start recording",
+        description: "Please check your microphone permissions, ensure no other app is using the mic, and try again.",
+        variant: "destructive",
+      });
+    }
+
+    // When you start a new recording, reset the ref:
+    fullRecognitionTranscriptRef.current = "";
 
     startSpeechRecognition()
   }
@@ -305,44 +334,41 @@ export default function TalkToMyself() {
     recognitionRef.current.onresult = (event: any) => {
       if (!isRecordingRef.current) return;
 
-      let finalTranscript = "";
       let interimTranscript = "";
-
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const transcript = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
-          finalTranscript += transcript + " ";
+          fullRecognitionTranscriptRef.current += transcript + " ";
         } else {
           interimTranscript += transcript;
         }
       }
 
+      // For live display
       if (showLiveTranscript) {
-        setLiveTranscript(((window as any).lastRecognitionTranscript || "") + finalTranscript + interimTranscript);
+        setLiveTranscript(fullRecognitionTranscriptRef.current + interimTranscript);
       }
 
-      const allTranscript = (finalTranscript + interimTranscript).toLowerCase().trim()
+      // Update lastRecognitionTranscript for fallback
+      (window as any).lastRecognitionTranscript = fullRecognitionTranscriptRef.current + interimTranscript;
 
-      if (
-        allTranscript.includes("i'm complete") ||
-        allTranscript.includes("im complete") ||
-        allTranscript.includes("i am complete") ||
-        allTranscript.includes("i'm done") ||
-        allTranscript.includes("im done") ||
-        allTranscript.includes("i am done") ||
-        allTranscript.includes("complete") ||
-        allTranscript.includes("finished") ||
-        allTranscript.includes("done")
-      ) {
-        stopRecording()
+      const allTranscript = (fullRecognitionTranscriptRef.current + interimTranscript).toLowerCase().trim();
+      // List of trigger phrases
+      const triggers = [
+        "i'm complete", "im complete", "i am complete", "i'm done", "im done", "i am done", "complete", "finished", "done"
+      ];
+      // If any trigger phrase is present, stop recording
+      if (triggers.some(trigger => allTranscript.endsWith(trigger))) {
+        stopRecording();
       }
     }
 
     recognitionRef.current.onerror = (event: any) => {
-      console.log("Speech recognition error:", event.error)
+      console.error("Speech recognition error:", event.error, event);
     }
 
     recognitionRef.current.onend = () => {
+      console.warn("Speech recognition ended");
       if (isRecordingRef.current && recognitionRef.current) {
         setTimeout(() => {
           try {
@@ -459,9 +485,39 @@ export default function TalkToMyself() {
       setProcessingStage("Transcribing your reflection...")
       setProgress(25)
 
+      console.log("Processing audio chunks:", audioChunksRef.current.length)
+      console.log("Audio chunks sizes:", audioChunksRef.current.map(chunk => chunk.size))
+      const totalSize = audioChunksRef.current.reduce((sum, chunk) => sum + chunk.size, 0)
+      console.log("Total audio size:", totalSize, "bytes")
+
       const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm;codecs=opus" })
-      const transcript = (await transcribeAudio(audioBlob)).trim()
-      console.log("Transcript:", transcript);
+      console.log("Created audio blob:", audioBlob.size, "bytes")
+      
+      if (!audioBlob || audioBlob.size === 0) {
+        console.error("Audio blob is empty!")
+        toast({
+          title: "No audio detected",
+          description: "No audio was recorded. Please check your microphone and try again.",
+          variant: "destructive",
+        });
+        setIsProcessing(false);
+        setProcessingStage("");
+        setProgress(0);
+        return;
+      }
+
+      let transcript = (await transcribeAudio(audioBlob)).trim();
+      // Remove trigger phrase from the end of the transcript
+      const triggers = [
+        "i'm complete", "im complete", "i am complete", "i'm done", "im done", "i am done", "complete", "finished", "done"
+      ];
+      for (const trigger of triggers) {
+        if (transcript.toLowerCase().endsWith(trigger)) {
+          transcript = transcript.slice(0, transcript.toLowerCase().lastIndexOf(trigger)).trim();
+          break;
+        }
+      }
+      console.log("Transcript (trigger removed):", transcript);
       if (!transcript || transcript.trim() === "") {
         setIsProcessing(false);
         setProcessingStage("");
@@ -561,24 +617,43 @@ export default function TalkToMyself() {
               data.transcript !== "I shared my thoughts and reflections in this session."
             ) {
               return data.transcript;
+            } else {
+              // Fallback to browser transcript if available
+              if ((window as any).lastRecognitionTranscript && (window as any).lastRecognitionTranscript.trim() !== "") {
+                console.warn("Google transcript empty, using browser transcript:", (window as any).lastRecognitionTranscript);
+                return (window as any).lastRecognitionTranscript.trim();
+              } else {
+                console.warn("Both Google and browser transcripts are empty.");
+                return "";
+              }
             }
-            // Otherwise, try browser transcript
-            if ((window as any).lastRecognitionTranscript) {
-              console.log("Google transcript empty, using browser transcript:", (window as any).lastRecognitionTranscript);
-              return (window as any).lastRecognitionTranscript.trim();
-            }
-            return ""; // No transcript
           } else {
             const errorText = await response.text()
             console.error("Google transcription failed:", errorText)
+            // Fallback to browser transcript if available
+            if ((window as any).lastRecognitionTranscript && (window as any).lastRecognitionTranscript.trim() !== "") {
+              console.warn("Google STT failed, using browser transcript:", (window as any).lastRecognitionTranscript);
+              return (window as any).lastRecognitionTranscript.trim();
+            } else {
+              console.warn("Google STT failed and browser transcript is empty.");
+              return "";
+            }
           }
         } catch (fetchError) {
           console.log("Google transcription request failed:", fetchError)
+          // Fallback to browser transcript if available
+          if ((window as any).lastRecognitionTranscript && (window as any).lastRecognitionTranscript.trim() !== "") {
+            console.warn("Google STT request failed, using browser transcript:", (window as any).lastRecognitionTranscript);
+            return (window as any).lastRecognitionTranscript.trim();
+          } else {
+            console.warn("Google STT request failed and browser transcript is empty.");
+            return "";
+          }
         }
       }
 
       // Use captured browser speech recognition transcript
-      if ((window as any).lastRecognitionTranscript) {
+      if ((window as any).lastRecognitionTranscript && (window as any).lastRecognitionTranscript.trim() !== "") {
         console.log("Using captured live transcript:", (window as any).lastRecognitionTranscript)
         return (window as any).lastRecognitionTranscript.trim()
       }
@@ -587,7 +662,14 @@ export default function TalkToMyself() {
       return "" // No transcript
     } catch (error) {
       console.error("Transcription error:", error)
-      return "" // No transcript
+      // Fallback to browser transcript if available
+      if ((window as any).lastRecognitionTranscript && (window as any).lastRecognitionTranscript.trim() !== "") {
+        console.warn("Transcription error, using browser transcript:", (window as any).lastRecognitionTranscript);
+        return (window as any).lastRecognitionTranscript.trim();
+      } else {
+        console.warn("Transcription error and browser transcript is empty.");
+        return "";
+      }
     }
   }
 
@@ -603,71 +685,8 @@ export default function TalkToMyself() {
             : settings.geminiKey
 
       if (!apiKey) {
-        // FIXED: Generate summary based on ACTUAL transcript content
-        console.log("No API key, generating content-based summary for:", transcript)
-
-        // Extract key themes and content from the actual transcript
-        const words = transcript
-          .toLowerCase()
-          .split(/\s+/)
-          .filter((word) => word.length > 2)
-        const meaningfulWords = words.filter(
-          (word) =>
-            ![
-              "the",
-              "and",
-              "with",
-              "that",
-              "this",
-              "for",
-              "are",
-              "was",
-              "were",
-              "been",
-              "have",
-              "has",
-              "had",
-              "will",
-              "would",
-              "could",
-              "should",
-            ].includes(word),
-        )
-
-        let summary = ""
-
-        // Analyze the specific content of this transcript
-        if (transcript.toLowerCase().includes("dancing")) {
-          summary += "I hear your joy and passion for dancing shining through. "
-        }
-
-        if (transcript.toLowerCase().includes("dana") || transcript.toLowerCase().includes("jess")) {
-          const people = []
-          if (transcript.toLowerCase().includes("dana")) people.push("Dana")
-          if (transcript.toLowerCase().includes("jess")) people.push("Jess")
-          summary += `The way you speak about ${people.join(" and ")} shows the warmth and connection you feel with ${people.length > 1 ? "them" : "them"}. `
-        }
-
-        if (transcript.toLowerCase().includes("like") || transcript.toLowerCase().includes("love")) {
-          summary += "There's genuine affection and enthusiasm in your words. "
-        }
-
-        if (transcript.toLowerCase().includes("definitely")) {
-          summary += "Your certainty and conviction come through clearly - you know what brings you joy. "
-        }
-
-        // Add meaningful words context
-        if (meaningfulWords.length > 0) {
-          const keyThemes = meaningfulWords.slice(0, 3).join(", ")
-          summary += `The themes of ${keyThemes} seem particularly meaningful to you right now. `
-        }
-
-        // Always end with encouragement
-        summary +=
-          "Thank you for sharing this authentic moment. Your willingness to express what matters to you is a beautiful form of self-reflection and self-care."
-
-        console.log("Generated content-based summary:", summary)
-        return summary
+        // No API key: just return the transcript or a message
+        return transcript ? `You said: "${transcript}"` : "";
       }
 
       // Use API when key is provided
@@ -686,11 +705,21 @@ export default function TalkToMyself() {
       }
 
       const data = await response.json()
-      return data.summary
+      const summary = data.summary?.trim() || "";
+
+      // If the summary is empty or looks like a stub, return a better fallback
+      if (
+        !summary ||
+        summary.toLowerCase().startsWith("the themes of") ||
+        summary.toLowerCase().includes("please provide the personal share")
+      ) {
+        return transcript ? `You said: "${transcript}"` : "";
+      }
+
+      return summary;
     } catch (error) {
-      console.error("Summary generation error:", error)
-      // Fallback with actual transcript content
-      return `I hear you sharing: "${transcript.substring(0, 100)}..."`
+      // On error, fallback to transcript or nothing
+      return transcript ? `You said: "${transcript}"` : "";
     }
   }
 
@@ -997,7 +1026,7 @@ export default function TalkToMyself() {
             <div className="flex items-center space-x-3">
               {(isRecording || isProcessing) && (
                 <Badge variant="outline" className="bg-orange-50 text-orange-700 border-orange-200 animate-pulse">
-                  {isRecording ? "Recording..." : "Processing..."}
+                  {isRecording ? "Listening..." : "Processing..."}
                 </Badge>
               )}
               {sessions.length > 0 && (
@@ -1034,7 +1063,7 @@ export default function TalkToMyself() {
                 )}
               >
                 <Mic className="w-4 h-4" />
-                <span>Record</span>
+                <span>Listen</span>
               </TabsTrigger>
               {currentSession && (
                 <>
@@ -1546,7 +1575,7 @@ export default function TalkToMyself() {
                     <p className="text-sm text-gray-500">Choose how securely you want to store your API keys</p>
                     <select
                       value={settings.storageMode}
-                      onChange={(e) => setSettings((prev) => ({ ...prev, storageMode: e.target.value }))}
+                      onChange={(e) => setSettings((prev: any) => ({ ...prev, storageMode: e.target.value }))}
                       className="w-full p-4 border border-gray-300 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white/80"
                     >
                       <option value="none">🔒 Maximum Security - No Storage (re-enter each session)</option>
@@ -1674,7 +1703,7 @@ export default function TalkToMyself() {
                         <input
                           type="password"
                           value={settings[key as keyof typeof settings] as string}
-                          onChange={(e) => setSettings((prev) => ({ ...prev, [key]: e.target.value }))}
+                          onChange={(e) => setSettings((prev: any) => ({ ...prev, [key]: e.target.value }))}
                           className="w-full p-4 border border-gray-300 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all bg-white/80"
                           placeholder={placeholder}
                         />
@@ -1697,7 +1726,7 @@ export default function TalkToMyself() {
                       <p className="text-sm text-gray-500">Choose which AI service to use for generating summaries</p>
                       <select
                         value={settings.summaryService}
-                        onChange={(e) => setSettings((prev) => ({ ...prev, summaryService: e.target.value }))}
+                        onChange={(e) => setSettings((prev: any) => ({ ...prev, summaryService: e.target.value }))}
                         className="w-full p-4 border border-gray-300 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white/80"
                       >
                         <option value="openai">OpenAI GPT</option>
