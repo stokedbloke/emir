@@ -61,6 +61,9 @@ export default function TalkToMyself() {
   const [currentSession, setCurrentSession] = useState<SessionData | null>(null)
   const [activeTab, setActiveTab] = useState("record")
 
+  // Check if user is admin (for development/testing)
+  const [isAdmin, setIsAdmin] = useState(false)
+  
   // Replace the settings useState with this more secure approach
   const [settings, setSettings] = useState(() => {
     // Use sessionStorage instead of localStorage for better privacy
@@ -75,12 +78,6 @@ export default function TalkToMyself() {
       }
     }
     return {
-      openaiKey: "",
-      claudeKey: "",
-      geminiKey: "",
-      huggingfaceKey: "",
-      elevenlabsKey: "",
-      humeKey: "",
       summaryService: "openai",
       voiceService: "browser",
       storageMode: "session", // session, memory, or none
@@ -113,6 +110,15 @@ export default function TalkToMyself() {
   // At the top of your component:
   const fullRecognitionTranscriptRef = useRef("");
 
+  const [serviceStatus, setServiceStatus] = useState({ huggingface: false, google: false });
+
+  useEffect(() => {
+    fetch('/api/status')
+      .then(res => res.json())
+      .then(setServiceStatus)
+      .catch(() => setServiceStatus({ huggingface: false, google: false }));
+  }, []);
+
   // Save settings based on storage preference
   useEffect(() => {
     if (typeof window !== "undefined" && settings.storageMode !== "memory") {
@@ -128,6 +134,20 @@ export default function TalkToMyself() {
   // Check microphone permission on mount
   useEffect(() => {
     checkMicrophonePermission()
+  }, [])
+
+  // Check if user is admin (for development/testing)
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const urlParams = new URLSearchParams(window.location.search)
+      const adminSecret = urlParams.get("admin")
+      const storedAdminSecret = sessionStorage.getItem("admin-secret")
+      
+      if (adminSecret === process.env.NEXT_PUBLIC_ADMIN_SECRET || storedAdminSecret === process.env.NEXT_PUBLIC_ADMIN_SECRET) {
+        setIsAdmin(true)
+        sessionStorage.setItem("admin-secret", adminSecret || storedAdminSecret || "")
+      }
+    }
   }, [])
 
   // Recording timer
@@ -582,73 +602,69 @@ export default function TalkToMyself() {
 
   const transcribeAudio = async (audioBlob: Blob): Promise<string> => {
     try {
-      const googleApiKey = settings.geminiKey
+      // Always try Google Speech-to-Text API (if configured on backend)
+      console.log("Using Google Speech-to-Text API for transcription...")
+      const formData = new FormData()
+      formData.append("audio", audioBlob, "recording.webm")
+      formData.append("service", "google")
 
-      if (googleApiKey) {
-        console.log("Using Google Speech-to-Text API for transcription...")
-        const formData = new FormData()
-        formData.append("audio", audioBlob, "recording.webm")
-        formData.append("apiKey", googleApiKey)
-        formData.append("service", "google")
+      try {
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), 15000)
 
-        try {
-          const controller = new AbortController()
-          const timeoutId = setTimeout(() => controller.abort(), 15000)
+        const response = await fetch("/api/transcribe", {
+          method: "POST",
+          body: formData,
+          signal: controller.signal,
+        })
 
-          const response = await fetch("/api/transcribe", {
-            method: "POST",
-            body: formData,
-            signal: controller.signal,
-          })
+        clearTimeout(timeoutId)
 
-          clearTimeout(timeoutId)
+        console.log("Google API response status:", response.status)
 
-          console.log("Google API response status:", response.status)
+        if (response.ok) {
+          const data = await response.json()
+          console.log("Google transcription result:", data)
+          console.log("Google STT raw response:", data)
 
-          if (response.ok) {
-            const data = await response.json()
-            console.log("Google transcription result:", data)
-            console.log("Google STT raw response:", data)
-
-            // Only use Google transcript if it is non-empty and not the fallback
-            if (
-              data.transcript &&
-              data.transcript.trim() !== "" &&
-              data.transcript !== "I shared my thoughts and reflections in this session."
-            ) {
-              return data.transcript;
-            } else {
-              // Fallback to browser transcript if available
-              if ((window as any).lastRecognitionTranscript && (window as any).lastRecognitionTranscript.trim() !== "") {
-                console.warn("Google transcript empty, using browser transcript:", (window as any).lastRecognitionTranscript);
-                return (window as any).lastRecognitionTranscript.trim();
-              } else {
-                console.warn("Both Google and browser transcripts are empty.");
-                return "";
-              }
-            }
+          // Only use Google transcript if it is non-empty and not the fallback
+          if (
+            data.transcript &&
+            data.transcript.trim() !== "" &&
+            data.transcript !== "I shared my thoughts and reflections in this session."
+          ) {
+            return data.transcript;
           } else {
-            const errorText = await response.text()
-            console.error("Google transcription failed:", errorText)
             // Fallback to browser transcript if available
             if ((window as any).lastRecognitionTranscript && (window as any).lastRecognitionTranscript.trim() !== "") {
-              console.warn("Google STT failed, using browser transcript:", (window as any).lastRecognitionTranscript);
+              console.warn("Google transcript empty, using browser transcript:", (window as any).lastRecognitionTranscript);
               return (window as any).lastRecognitionTranscript.trim();
             } else {
-              console.warn("Google STT failed and browser transcript is empty.");
+              console.warn("Both Google and browser transcripts are empty.");
               return "";
             }
           }
-        } catch (fetchError) {
-          console.log("Google transcription request failed:", fetchError)
+        } else {
+          const errorText = await response.text()
+          console.error("Google transcription failed:", errorText)
           // Fallback to browser transcript if available
           if ((window as any).lastRecognitionTranscript && (window as any).lastRecognitionTranscript.trim() !== "") {
-            console.warn("Google STT request failed, using browser transcript:", (window as any).lastRecognitionTranscript);
+            console.warn("Google STT failed, using browser transcript:", (window as any).lastRecognitionTranscript);
             return (window as any).lastRecognitionTranscript.trim();
           } else {
-            console.warn("Google STT request failed and browser transcript is empty.");
+            console.warn("Google STT failed and browser transcript is empty.");
             return "";
           }
+        }
+      } catch (fetchError) {
+        console.log("Google transcription request failed:", fetchError)
+        // Fallback to browser transcript if available
+        if ((window as any).lastRecognitionTranscript && (window as any).lastRecognitionTranscript.trim() !== "") {
+          console.warn("Google STT request failed, using browser transcript:", (window as any).lastRecognitionTranscript);
+          return (window as any).lastRecognitionTranscript.trim();
+        } else {
+          console.warn("Google STT request failed and browser transcript is empty.");
+          return "";
         }
       }
 
@@ -677,26 +693,13 @@ export default function TalkToMyself() {
     try {
       console.log("Generating summary for transcript:", transcript)
 
-      const apiKey =
-        settings.summaryService === "openai"
-          ? settings.openaiKey
-          : settings.summaryService === "claude"
-            ? settings.claudeKey
-            : settings.geminiKey
-
-      if (!apiKey) {
-        // No API key: just return the transcript or a message
-        return transcript ? `You said: "${transcript}"` : "";
-      }
-
-      // Use API when key is provided
+      // Use API (keys are configured on backend)
       const response = await fetch("/api/summarize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           transcript,
           service: settings.summaryService,
-          apiKey: apiKey,
         }),
       })
 
@@ -730,7 +733,6 @@ export default function TalkToMyself() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           text,
-          apiKey: settings.huggingfaceKey,
         }),
       })
 
@@ -756,26 +758,22 @@ export default function TalkToMyself() {
   const [selectedGoogleGender, setSelectedGoogleGender] = useState<string>("FEMALE");
   const [selectedHumeVoice, setSelectedHumeVoice] = useState<string>("ITO");
 
-  // Fetch ElevenLabs voices if API key is present
+  // Fetch ElevenLabs voices (API key is configured on backend)
   useEffect(() => {
     const fetchVoices = async () => {
-      if (settings.elevenlabsKey) {
-        try {
-          const res = await fetch("https://api.elevenlabs.io/v1/voices", {
-            headers: { "xi-api-key": settings.elevenlabsKey }
-          });
-          if (res.ok) {
-            const data = await res.json();
-            setElevenLabsVoices(data.voices.map((v: any) => ({ id: v.voice_id, name: v.name })));
-            if (data.voices.length > 0) setSelectedElevenLabsVoice(data.voices[0].voice_id);
-          }
-        } catch (e) {
-          console.warn("Failed to fetch ElevenLabs voices", e);
+      try {
+        const res = await fetch("/api/voice/elevenlabs/voices");
+        if (res.ok) {
+          const data = await res.json();
+          setElevenLabsVoices(data.voices.map((v: any) => ({ id: v.voice_id, name: v.name })));
+          if (data.voices.length > 0) setSelectedElevenLabsVoice(data.voices[0].voice_id);
         }
+      } catch (e) {
+        console.warn("Failed to fetch ElevenLabs voices", e);
       }
     };
     fetchVoices();
-  }, [settings.elevenlabsKey]);
+  }, []);
 
   const speakSummary = async (summary: string) => {
     const playAudioBlob = (blob: Blob) => {
@@ -797,12 +795,12 @@ export default function TalkToMyself() {
       };
       audio.play();
     };
-    if (settings.voiceService === "elevenlabs" && settings.elevenlabsKey) {
+    if (settings.voiceService === "elevenlabs") {
       try {
         const response = await fetch("/api/voice/elevenlabs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: summary, apiKey: settings.elevenlabsKey, voiceId: selectedElevenLabsVoice }),
+          body: JSON.stringify({ text: summary, voiceId: selectedElevenLabsVoice }),
         });
         if (!response.ok) throw new Error("Failed to fetch ElevenLabs audio");
         const audioBlob = await response.blob();
@@ -811,12 +809,12 @@ export default function TalkToMyself() {
       } catch (err) {
         console.warn("Falling back to browser TTS: ElevenLabs TTS error:", err);
       }
-    } else if (settings.voiceService === "hume" && settings.humeKey) {
+    } else if (settings.voiceService === "hume") {
       try {
         const response = await fetch("/api/voice/hume", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: summary, apiKey: settings.humeKey, voice: selectedHumeVoice }),
+          body: JSON.stringify({ text: summary, voice: selectedHumeVoice }),
         });
         if (!response.ok) throw new Error("Failed to fetch Hume audio");
         const audioBlob = await response.blob();
@@ -825,12 +823,12 @@ export default function TalkToMyself() {
       } catch (err) {
         console.warn("Falling back to browser TTS: Hume TTS error:", err);
       }
-    } else if (settings.voiceService === "google" && settings.geminiKey) {
+    } else if (settings.voiceService === "google") {
       try {
         const response = await fetch("/api/voice/google", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: summary, apiKey: settings.geminiKey, languageCode: selectedGoogleLang, gender: selectedGoogleGender }),
+          body: JSON.stringify({ text: summary, languageCode: selectedGoogleLang, gender: selectedGoogleGender }),
         });
         if (!response.ok) throw new Error("Failed to fetch Google TTS audio");
         const data = await response.json();
@@ -987,7 +985,13 @@ export default function TalkToMyself() {
     )
   }
 
-  // Main app interface
+  // Place this BEFORE your return (
+  const visibleTabs =
+    1 + // record
+    (currentSession ? 3 : 0) +
+    (sessions.filter(s => s.transcript).length > 0 ? 1 : 0) +
+    (isAdmin ? 1 : 0);
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-rose-50 via-purple-50 to-indigo-100">
       {/* Ambient background elements */}
@@ -1034,12 +1038,12 @@ export default function TalkToMyself() {
                   {sessions.length} reflection{sessions.length !== 1 ? "s" : ""}
                 </Badge>
               )}
-              {settings.geminiKey && (
+              {serviceStatus.google && (
                 <Badge variant="secondary" className="bg-green-100 text-green-700 border-green-200">
                   Google AI Connected
                 </Badge>
               )}
-              {settings.huggingfaceKey && (
+              {serviceStatus.huggingface && (
                 <Badge variant="secondary" className="bg-blue-100 text-blue-700 border-blue-200">
                   HuggingFace Connected
                 </Badge>
@@ -1053,80 +1057,95 @@ export default function TalkToMyself() {
         <Tabs value={activeTab} onValueChange={canSwitchTab ? setActiveTab : undefined} className="space-y-8">
           {/* Tab Navigation */}
           <div className="flex justify-center">
-            <TabsList className="bg-white/80 backdrop-blur-xl border border-white/30 shadow-xl rounded-2xl p-2">
-              <TabsTrigger
-                value="record"
-                disabled={!canSwitchTab && activeTab !== "record"}
-                className={cn(
-                  "flex items-center space-x-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-indigo-600 data-[state=active]:text-white rounded-xl px-6 py-3 transition-all duration-300",
-                  !canSwitchTab && activeTab !== "record" && "opacity-50 cursor-not-allowed",
-                )}
-              >
-                <Mic className="w-4 h-4" />
-                <span>Listen</span>
-              </TabsTrigger>
-              {currentSession && (
-                <>
-                  <TabsTrigger
-                    value="summary"
-                    disabled={!canSwitchTab && activeTab !== "summary"}
-                    className={cn(
-                      "flex items-center space-x-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-indigo-600 data-[state=active]:text-white rounded-xl px-6 py-3 transition-all duration-300",
-                      !canSwitchTab && activeTab !== "summary" && "opacity-50 cursor-not-allowed",
-                    )}
-                  >
-                    <Brain className="w-4 h-4" />
-                    <span>Summary</span>
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="analysis"
-                    disabled={!canSwitchTab && activeTab !== "analysis"}
-                    className={cn(
-                      "flex items-center space-x-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-indigo-600 data-[state=active]:text-white rounded-xl px-6 py-3 transition-all duration-300",
-                      !canSwitchTab && activeTab !== "analysis" && "opacity-50 cursor-not-allowed",
-                    )}
-                  >
-                    <BarChart3 className="w-4 h-4" />
-                    <span>Analysis</span>
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="transcript"
-                    disabled={!canSwitchTab && activeTab !== "transcript"}
-                    className={cn(
-                      "flex items-center space-x-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-indigo-600 data-[state=active]:text-white rounded-xl px-6 py-3 transition-all duration-300",
-                      !canSwitchTab && activeTab !== "transcript" && "opacity-50 cursor-not-allowed",
-                    )}
-                  >
-                    <FileText className="w-4 h-4" />
-                    <span>Transcript</span>
-                  </TabsTrigger>
-                </>
-              )}
-              {sessions.length > 0 && (
-                <TabsTrigger
-                  value="history"
-                  disabled={!canSwitchTab && activeTab !== "history"}
-                  className={cn(
-                    "flex items-center space-x-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-indigo-600 data-[state=active]:text-white rounded-xl px-6 py-3 transition-all duration-300",
-                    !canSwitchTab && activeTab !== "history" && "opacity-50 cursor-not-allowed",
-                  )}
-                >
-                  <History className="w-4 h-4" />
-                  <span>History</span>
-                </TabsTrigger>
-              )}
-              <TabsTrigger
-                value="settings"
-                disabled={!canSwitchTab && activeTab !== "settings"}
-                className={cn(
-                  "flex items-center space-x-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-indigo-600 data-[state=active]:text-white rounded-xl px-6 py-3 transition-all duration-300",
-                  !canSwitchTab && activeTab !== "settings" && "opacity-50 cursor-not-allowed",
-                )}
-              >
-                <Settings className="w-4 h-4" />
-                <span>Settings</span>
-              </TabsTrigger>
-            </TabsList>
+            {visibleTabs > 1 && (
+              <TabsList className="bg-white/80 backdrop-blur-xl border border-white/30 shadow-xl rounded-2xl p-2">
+                {
+                  (
+                    1 // Always show "record"
+                    + (currentSession ? 3 : 0) // summary, analysis, transcript
+                    + (sessions.filter(s => s.transcript).length > 0 ? 1 : 0) // history
+                    + (isAdmin ? 1 : 0) // settings
+                  ) > 1 && (
+                    <>
+                      <TabsTrigger
+                        value="record"
+                        disabled={!canSwitchTab && activeTab !== "record"}
+                        className={cn(
+                          "flex items-center space-x-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-indigo-600 data-[state=active]:text-white rounded-xl px-6 py-3 transition-all duration-300",
+                          !canSwitchTab && activeTab !== "record" && "opacity-50 cursor-not-allowed",
+                        )}
+                      >
+                        <Mic className="w-4 h-4" />
+                        <span>Listen</span>
+                      </TabsTrigger>
+                      {currentSession && (
+                        <>
+                          <TabsTrigger
+                            value="summary"
+                            disabled={!canSwitchTab && activeTab !== "summary"}
+                            className={cn(
+                              "flex items-center space-x-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-indigo-600 data-[state=active]:text-white rounded-xl px-6 py-3 transition-all duration-300",
+                              !canSwitchTab && activeTab !== "summary" && "opacity-50 cursor-not-allowed",
+                            )}
+                          >
+                            <Brain className="w-4 h-4" />
+                            <span>Summary</span>
+                          </TabsTrigger>
+                          <TabsTrigger
+                            value="analysis"
+                            disabled={!canSwitchTab && activeTab !== "analysis"}
+                            className={cn(
+                              "flex items-center space-x-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-indigo-600 data-[state=active]:text-white rounded-xl px-6 py-3 transition-all duration-300",
+                              !canSwitchTab && activeTab !== "analysis" && "opacity-50 cursor-not-allowed",
+                            )}
+                          >
+                            <BarChart3 className="w-4 h-4" />
+                            <span>Analysis</span>
+                          </TabsTrigger>
+                          <TabsTrigger
+                            value="transcript"
+                            disabled={!canSwitchTab && activeTab !== "transcript"}
+                            className={cn(
+                              "flex items-center space-x-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-indigo-600 data-[state=active]:text-white rounded-xl px-6 py-3 transition-all duration-300",
+                              !canSwitchTab && activeTab !== "transcript" && "opacity-50 cursor-not-allowed",
+                            )}
+                          >
+                            <FileText className="w-4 h-4" />
+                            <span>Transcript</span>
+                          </TabsTrigger>
+                        </>
+                      )}
+                      {sessions.length > 0 && (
+                        <TabsTrigger
+                          value="history"
+                          disabled={!canSwitchTab && activeTab !== "history"}
+                          className={cn(
+                            "flex items-center space-x-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-indigo-600 data-[state=active]:text-white rounded-xl px-6 py-3 transition-all duration-300",
+                            !canSwitchTab && activeTab !== "history" && "opacity-50 cursor-not-allowed",
+                          )}
+                        >
+                          <History className="w-4 h-4" />
+                          <span>History</span>
+                        </TabsTrigger>
+                      )}
+                      {isAdmin && (
+                        <TabsTrigger
+                          value="settings"
+                          disabled={!canSwitchTab && activeTab !== "settings"}
+                          className={cn(
+                            "flex items-center space-x-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-indigo-600 data-[state=active]:text-white rounded-xl px-6 py-3 transition-all duration-300",
+                            !canSwitchTab && activeTab !== "settings" && "opacity-50 cursor-not-allowed",
+                          )}
+                        >
+                          <Settings className="w-4 h-4" />
+                          <span>Settings</span>
+                        </TabsTrigger>
+                      )}
+                    </>
+                  )
+                }
+              </TabsList>
+            )}
           </div>
 
           {/* Recording Tab */}
@@ -1345,9 +1364,9 @@ export default function TalkToMyself() {
                       <span>Emotional Landscape</span>
                     </CardTitle>
                     <CardDescription className="text-gray-600 text-lg">
-                      {settings.huggingfaceKey
+                      {serviceStatus.huggingface
                         ? "AI-powered emotion analysis using Hugging Face models"
-                        : "Content-based emotion analysis from your transcript"}
+                        : <span className="text-orange-600 font-semibold">(Demo) Fallback emotion analysis – not real AI, for demonstration only</span>}
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="p-8">
@@ -1523,8 +1542,9 @@ export default function TalkToMyself() {
             </TabsContent>
           )}
 
-          {/* Settings Tab */}
-          <TabsContent value="settings" className="space-y-8">
+          {/* Settings Tab - Admin Only */}
+          {isAdmin && (
+            <TabsContent value="settings" className="space-y-8">
             <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
               <CardHeader className="bg-gradient-to-r from-blue-50 to-indigo-50 p-8">
                 <CardTitle className="text-2xl text-gray-800 flex items-center space-x-3">
@@ -1551,16 +1571,13 @@ export default function TalkToMyself() {
                       </h3>
                       <div className="space-y-2 text-gray-600 leading-relaxed">
                         <p>
-                          <strong>Persistent Storage:</strong> API keys are now saved securely in your browser's
-                          localStorage and persist between sessions.
+                          <strong>Backend Only:</strong> API keys are now stored securely on the server and never exposed to your browser or device.
                         </p>
                         <p>
-                          <strong>Local Only:</strong> Keys never leave your device - they're stored locally and used
-                          directly by your browser.
+                          <strong>Local Only:</strong> Your data is processed securely and never leaves the server except for AI analysis.
                         </p>
                         <p>
-                          <strong>Enhanced Features:</strong> With API keys configured, you get better transcription,
-                          real emotion analysis, and smarter summaries.
+                          <strong>Enhanced Features:</strong> With backend API keys configured, you get better transcription, real emotion analysis, and smarter summaries.
                         </p>
                       </div>
                     </div>
@@ -1741,30 +1758,24 @@ export default function TalkToMyself() {
                       <p className="text-sm text-gray-500">Choose how you'd like to hear your summaries</p>
                       {/* Toggle for available TTS providers */}
                       <div className="flex space-x-2 mb-2">
-                        {settings.elevenlabsKey && (
-                          <Button
-                            variant={settings.voiceService === "elevenlabs" ? "default" : "outline"}
-                            onClick={() => setSettings((prev: any) => ({ ...prev, voiceService: "elevenlabs" }))}
-                          >
-                            ElevenLabs
-                          </Button>
-                        )}
-                        {settings.humeKey && (
-                          <Button
-                            variant={settings.voiceService === "hume" ? "default" : "outline"}
-                            onClick={() => setSettings((prev: any) => ({ ...prev, voiceService: "hume" }))}
-                          >
-                            Hume.ai
-                          </Button>
-                        )}
-                        {settings.geminiKey && (
-                          <Button
-                            variant={settings.voiceService === "google" ? "default" : "outline"}
-                            onClick={() => setSettings((prev: any) => ({ ...prev, voiceService: "google" }))}
-                          >
-                            Google TTS
-                          </Button>
-                        )}
+                        <Button
+                          variant={settings.voiceService === "elevenlabs" ? "default" : "outline"}
+                          onClick={() => setSettings((prev: any) => ({ ...prev, voiceService: "elevenlabs" }))}
+                        >
+                          ElevenLabs
+                        </Button>
+                        <Button
+                          variant={settings.voiceService === "hume" ? "default" : "outline"}
+                          onClick={() => setSettings((prev: any) => ({ ...prev, voiceService: "hume" }))}
+                        >
+                          Hume.ai
+                        </Button>
+                        <Button
+                          variant={settings.voiceService === "google" ? "default" : "outline"}
+                          onClick={() => setSettings((prev: any) => ({ ...prev, voiceService: "google" }))}
+                        >
+                          Google TTS
+                        </Button>
                         <Button
                           variant={settings.voiceService === "browser" ? "default" : "outline"}
                           onClick={() => setSettings((prev: any) => ({ ...prev, voiceService: "browser" }))}
@@ -1773,7 +1784,7 @@ export default function TalkToMyself() {
                         </Button>
                       </div>
                       {/* Per-provider voice selection */}
-                      {settings.voiceService === "elevenlabs" && settings.elevenlabsKey && (
+                      {settings.voiceService === "elevenlabs" && (
                         <div className="space-y-1">
                           <label className="text-sm font-medium text-gray-600">ElevenLabs Voice</label>
                           <select
@@ -1787,7 +1798,7 @@ export default function TalkToMyself() {
                           </select>
                         </div>
                       )}
-                      {settings.voiceService === "google" && settings.geminiKey && (
+                      {settings.voiceService === "google" && (
                         <div className="space-y-1">
                           <label className="text-sm font-medium text-gray-600">Google TTS Language</label>
                           <select
@@ -1813,7 +1824,7 @@ export default function TalkToMyself() {
                           </select>
                         </div>
                       )}
-                      {settings.voiceService === "hume" && settings.humeKey && (
+                      {settings.voiceService === "hume" && (
                         <div className="space-y-1">
                           <label className="text-sm font-medium text-gray-600">Hume Voice</label>
                           <select
@@ -1832,8 +1843,10 @@ export default function TalkToMyself() {
               </CardContent>
             </Card>
           </TabsContent>
+          )}
         </Tabs>
       </div>
     </div>
   )
 }
+

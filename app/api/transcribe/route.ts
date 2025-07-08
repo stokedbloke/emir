@@ -2,11 +2,10 @@ export async function POST(request: Request) {
   try {
     const formData = await request.formData()
     const audioFile = formData.get("audio") as File
-    const apiKey = formData.get("apiKey") as string
     const service = (formData.get("service") as string) || "google"
 
-    if (!audioFile || !apiKey) {
-      return Response.json({ error: "Audio file and API key are required" }, { status: 400 })
+    if (!audioFile) {
+      return Response.json({ error: "Audio file is required" }, { status: 400 })
     }
 
     // Convert audio to base64
@@ -15,7 +14,12 @@ export async function POST(request: Request) {
 
     if (service === "google") {
       // Use Google Cloud Speech-to-Text API
-      const response = await fetch(`https://speech.googleapis.com/v1/speech:recognize?key=${apiKey}`, {
+      const googleApiKey = process.env.GOOGLE_API_KEY
+      if (!googleApiKey) {
+        return Response.json({ transcript: "" })
+      }
+      
+      const response = await fetch(`https://speech.googleapis.com/v1/speech:recognize?key=${googleApiKey}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

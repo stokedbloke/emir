@@ -56,6 +56,18 @@ export async function POST(request: Request) {
     }
 
     // Fallback: Enhanced basic audio analysis
+    if (typeof (globalThis.AudioContext) === "undefined" && typeof ((globalThis as any).webkitAudioContext) === "undefined") {
+      // Not running in a browser, skip fallback
+      return Response.json({
+        energy: "Unknown",
+        tone: "Unknown",
+        pace: "Unknown",
+        volume: "Unknown",
+        articulation: "Unknown",
+        confidence: 0.5,
+        vocalEmotion: "Unknown",
+      });
+    }
     const audioBuffer = await audioFile.arrayBuffer()
     const audioContext = new (globalThis.AudioContext || (globalThis as any).webkitAudioContext)()
 

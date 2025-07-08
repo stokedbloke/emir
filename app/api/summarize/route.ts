@@ -5,10 +5,10 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google"
 
 export async function POST(request: Request) {
   try {
-    const { transcript, service = "openai", apiKey } = await request.json()
+    const { transcript, service = "openai" } = await request.json()
 
-    if (!apiKey) {
-      return Response.json({ error: "API key is required" }, { status: 400 })
+    if (!transcript) {
+      return Response.json({ error: "Transcript is required" }, { status: 400 })
     }
 
     // Short, concise prompt for 50-word summary
@@ -17,15 +17,27 @@ export async function POST(request: Request) {
     let model
     switch (service) {
       case "claude":
-        const anthropic = createAnthropic({ apiKey })
+        const anthropicApiKey = process.env.ANTHROPIC_API_KEY
+        if (!anthropicApiKey) {
+          return Response.json({ error: "Claude API key not configured" }, { status: 500 })
+        }
+        const anthropic = createAnthropic({ apiKey: anthropicApiKey })
         model = anthropic("claude-3-haiku-20240307")
         break
       case "gemini":
-        const google = createGoogleGenerativeAI({ apiKey })
+        const googleApiKey = process.env.GOOGLE_API_KEY
+        if (!googleApiKey) {
+          return Response.json({ error: "Google API key not configured" }, { status: 500 })
+        }
+        const google = createGoogleGenerativeAI({ apiKey: googleApiKey })
         model = google("gemini-1.5-flash")
         break
       default:
-        const openai = createOpenAI({ apiKey })
+        const openaiApiKey = process.env.OPENAI_API_KEY
+        if (!openaiApiKey) {
+          return Response.json({ error: "OpenAI API key not configured" }, { status: 500 })
+        }
+        const openai = createOpenAI({ apiKey: openaiApiKey })
         model = openai("gpt-4o-mini")
     }
 

@@ -1,13 +1,22 @@
 export async function POST(request: Request) {
   try {
-    const { text, apiKey, voiceId = "pNInz6obpgDQGcFmaJgB" } = await request.json()
+    const { text, voiceId = "pNInz6obpgDQGcFmaJgB" } = await request.json()
+
+    if (!text) {
+      return Response.json({ error: "Text is required" }, { status: 400 })
+    }
+
+    const elevenlabsApiKey = process.env.ELEVENLABS_API_KEY
+    if (!elevenlabsApiKey) {
+      return Response.json({ error: "ElevenLabs API key not configured" }, { status: 500 })
+    }
 
     const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
       method: "POST",
       headers: {
         Accept: "audio/mpeg",
         "Content-Type": "application/json",
-        "xi-api-key": apiKey,
+        "xi-api-key": elevenlabsApiKey,
       },
       body: JSON.stringify({
         text,

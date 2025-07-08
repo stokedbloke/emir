@@ -1,12 +1,21 @@
 export async function POST(request: Request) {
   try {
-    const { text, apiKey, voice = "ITO" } = await request.json()
+    const { text, voice = "ITO" } = await request.json()
+
+    if (!text) {
+      return Response.json({ error: "Text is required" }, { status: 400 })
+    }
+
+    const humeApiKey = process.env.HUME_API_KEY
+    if (!humeApiKey) {
+      return Response.json({ error: "Hume API key not configured" }, { status: 500 })
+    }
 
     // Hume.ai TTS integration
     const response = await fetch("https://api.hume.ai/v0/evi/chat", {
       method: "POST",
       headers: {
-        "X-Hume-Api-Key": apiKey,
+        "X-Hume-Api-Key": humeApiKey,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({

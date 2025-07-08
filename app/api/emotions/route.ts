@@ -1,18 +1,19 @@
 export async function POST(request: Request) {
   try {
-    const { text, apiKey } = await request.json()
+    const { text } = await request.json()
 
     if (!text) {
       return Response.json({ error: "Text is required" }, { status: 400 })
     }
 
-    // Try advanced Hugging Face models if key is provided
-    if (apiKey) {
+    // Try advanced Hugging Face models if key is configured
+    const huggingfaceApiKey = process.env.HUGGINGFACE_API_KEY
+    if (huggingfaceApiKey) {
       try {
         // First try the 27-emotion model (much better than 7-emotion)
         const response = await fetch("https://api-inference.huggingface.co/models/SamLowe/roberta-base-go_emotions", {
           headers: {
-            Authorization: `Bearer ${apiKey}`,
+            Authorization: `Bearer ${huggingfaceApiKey}`,
             "Content-Type": "application/json",
           },
           method: "POST",

@@ -1,9 +1,18 @@
 export async function POST(request: Request) {
   try {
-    const { text, apiKey, languageCode = "en-US", gender = "FEMALE" } = await request.json();
+    const { text, languageCode = "en-US", gender = "FEMALE" } = await request.json();
+
+    if (!text) {
+      return Response.json({ error: "Text is required" }, { status: 400 })
+    }
+
+    const googleApiKey = process.env.GOOGLE_API_KEY
+    if (!googleApiKey) {
+      return Response.json({ error: "Google API key not configured" }, { status: 500 })
+    }
 
     const response = await fetch(
-      `https://texttospeech.googleapis.com/v1/text:synthesize?key=${apiKey}`,
+      `https://texttospeech.googleapis.com/v1/text:synthesize?key=${googleApiKey}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
