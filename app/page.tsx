@@ -355,7 +355,7 @@ export default function TalkToMyself() {
       const allTranscript = (fullRecognitionTranscriptRef.current + interimTranscript).toLowerCase().trim();
       // List of trigger phrases
       const triggers = [
-        "i'm complete", "im complete", "i am complete", "i'm done", "im done", "i am done", "complete", "finished", "done"
+        "i am complete", "i'm complete"
       ];
       // If any trigger phrase is present, stop recording
       if (triggers.some(trigger => allTranscript.endsWith(trigger))) {
@@ -509,7 +509,7 @@ export default function TalkToMyself() {
       let transcript = (await transcribeAudio(audioBlob)).trim();
       // Remove trigger phrase from the end of the transcript
       const triggers = [
-        "i'm complete", "im complete", "i am complete", "i'm done", "im done", "i am done", "complete", "finished", "done"
+        "i am complete", "i'm complete"
       ];
       for (const trigger of triggers) {
         if (transcript.toLowerCase().endsWith(trigger)) {
@@ -1175,21 +1175,21 @@ export default function TalkToMyself() {
                   <div className="text-center space-y-4 max-w-2xl">
                     <h2 className="text-3xl font-bold text-gray-800">
                       {isRecording
-                        ? "I'm here, listening with care..."
+                        ? "I'm here, actively listening to you with care..."
                         : isProcessing
                           ? "Reflecting on your words..."
                           : isSpeaking
                             ? "Speaking your reflection..."
-                            : "Ready to listen to your heart"}
+                            : "Ready to listen to your voice"}
                     </h2>
                     <p className="text-lg text-gray-600 leading-relaxed">
                       {isRecording
                         ? "Take your time. Breathe deeply. Share whatever feels right. When you're ready to finish, simply say 'I'm complete' or tap the button."
                         : isProcessing
-                          ? "I'm using AI to transcribe and understand what you've shared, creating a thoughtful reflection just for you."
+                          ? "I'm using AI to transcribe and hear what you've shared, creating an objective synthesis."
                           : isSpeaking
                             ? "Listen to your personalized reflection. Recording is paused while I'm speaking."
-                            : "This is your safe space. Click the microphone when you're ready to share your thoughts, feelings, or whatever is on your mind."}
+                            : "This is your safe space. Click the microphone when you're ready to share your thoughts, feelings, anything you want help remembering or whatever is on your mind."}
                     </p>
                   </div>
 
@@ -1226,7 +1226,7 @@ export default function TalkToMyself() {
                           <p className="text-gray-600 leading-relaxed">
                             There's no right or wrong way to use this space. You might share your dreams, process a
                             difficult day, explore your feelings, or simply think out loud. Whatever you choose to share
-                            will be met with understanding and care.
+                            will be private and secure.
                           </p>
                         </div>
                       </div>
@@ -1684,18 +1684,19 @@ export default function TalkToMyself() {
                             {settings[key as keyof typeof settings] && (
                               <Badge className="bg-green-100 text-green-700 border-green-200">Configured</Badge>
                             )}
-                            {settings[key as keyof typeof settings] && service !== "huggingface" && (
+                            {settings[key as keyof typeof settings] && service !== "huggingface" && service !== "openai" && (
                               <Button
                                 variant="outline"
                                 size="sm"
-                                onClick={() =>
-                                  checkApiCredits(service, settings[key as keyof typeof settings] as string)
-                                }
+                                onClick={() => checkApiCredits(service, settings[key as keyof typeof settings] as string)}
                                 disabled={isCheckingCredits}
                                 className="text-xs"
                               >
                                 {isCheckingCredits ? "Checking..." : "Check Credits"}
                               </Button>
+                            )}
+                            {service === "openai" && (
+                              <span className="text-xs text-gray-500 ml-2">OpenAI does not provide API usage info for personal keys.</span>
                             )}
                           </div>
                         </div>
@@ -1707,7 +1708,7 @@ export default function TalkToMyself() {
                           className="w-full p-4 border border-gray-300 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all bg-white/80"
                           placeholder={placeholder}
                         />
-                        {apiCredits[service] && (
+                        {apiCredits[service] && service !== "openai" && (
                           <p className="text-sm text-green-600 flex items-center space-x-1">
                             <CheckCircle className="w-4 h-4" />
                             <span>Credits available: {apiCredits[service]}</span>
