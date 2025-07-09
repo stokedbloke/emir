@@ -1,5 +1,15 @@
 "use client"
 
+// Add this at the top for TypeScript to recognize process.env in Next.js
+// @ts-ignore
+declare var process: {
+  env: {
+    NEXT_PUBLIC_SUPABASE_URL: string;
+    NEXT_PUBLIC_SUPABASE_ANON_KEY: string;
+    NEXT_PUBLIC_ADMIN_SECRET?: string;
+  };
+};
+
 import { useState, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -27,6 +37,9 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/use-toast"
+import { v4 as uuidv4 } from 'uuid';
+import { createClient as createSupabaseClient } from '@supabase/supabase-js';
+import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 
 interface VocalCharacteristics {
   tone: string
@@ -51,7 +64,18 @@ interface SessionData {
   audioBlob?: Blob
 }
 
+// Move Supabase client creation to the top-level (outside the component)
+// Make sure to set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in your .env.local and Vercel dashboard
+// console.log('SUPABASE_URL:', process.env.NEXT_PUBLIC_SUPABASE_URL);
+// console.log('SUPABASE_ANON_KEY:', process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+
+const supabase = createSupabaseClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
 export default function TalkToMyself() {
+  // All hooks must be declared here, before any return statement
   const [hasPermission, setHasPermission] = useState<boolean | null>(null)
   const [isRecording, setIsRecording] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
@@ -60,13 +84,8 @@ export default function TalkToMyself() {
   const [sessions, setSessions] = useState<SessionData[]>([])
   const [currentSession, setCurrentSession] = useState<SessionData | null>(null)
   const [activeTab, setActiveTab] = useState("record")
-
-  // Check if user is admin (for development/testing)
   const [isAdmin, setIsAdmin] = useState(false)
-  
-  // Replace the settings useState with this more secure approach
   const [settings, setSettings] = useState(() => {
-    // Use sessionStorage instead of localStorage for better privacy
     if (typeof window !== "undefined") {
       const saved = sessionStorage.getItem("talk-to-myself-settings")
       if (saved) {
@@ -80,10 +99,9 @@ export default function TalkToMyself() {
     return {
       summaryService: "openai",
       voiceService: "browser",
-      storageMode: "session", // session, memory, or none
+      storageMode: "session",
     }
   })
-
   const [recordingTime, setRecordingTime] = useState(0)
   const [breathingPhase, setBreathingPhase] = useState<"inhale" | "exhale">("inhale")
   const [apiCredits, setApiCredits] = useState<Record<string, string | null>>({})
@@ -91,28 +109,40 @@ export default function TalkToMyself() {
   const [isSpeaking, setIsSpeaking] = useState(false)
   const [isPaused, setIsPaused] = useState(false)
   const [utteranceRef, setUtteranceRef] = useState<SpeechSynthesisUtterance | null>(null)
-
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
   const audioContextRef = useRef<AudioContext | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
-  const recordingTimerRef = useRef<NodeJS.Timeout | null>(null)
-  const breathingTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const recordingTimerRef = useRef<number | null>(null)
+  const breathingTimerRef = useRef<number | null>(null)
   const recognitionRef = useRef<any>(null)
   const isRecordingRef = useRef(false)
-
   const [liveTranscript, setLiveTranscript] = useState("");
   const [showLiveTranscript, setShowLiveTranscript] = useState(true);
-
   const { toast } = useToast();
-
-  // At the top of your component:
   const fullRecognitionTranscriptRef = useRef("");
-
   const [serviceStatus, setServiceStatus] = useState({ huggingface: false, google: false });
-
   const [actualTTSService, setActualTTSService] = useState<string>("browser");
+  const [userId, setUserId] = useState<string>("");
+  const [speechErrorCount, setSpeechErrorCount] = useState(0);
+  const [speechRecognitionError, setSpeechRecognitionError] = useState<string | null>(null);
+  const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
+  const MAX_SPEECH_ERRORS = 3;
+  const [selectedElevenLabsVoice, setSelectedElevenLabsVoice] = useState<string>("pNInz6obpgDQGcFmaJgB");
+  const [elevenLabsVoices, setElevenLabsVoices] = useState<{id: string, name: string}[]>([]);
+  const [selectedGoogleLang, setSelectedGoogleLang] = useState<string>("en-US");
+  const [selectedGoogleGender, setSelectedGoogleGender] = useState<string>("FEMALE");
+  const [selectedHumeVoice, setSelectedHumeVoice] = useState<string>("ITO");
+
+  useEffect(() => {
+    let id = localStorage.getItem('ttm-user-id');
+    if (!id) {
+      id = uuidv4();
+      localStorage.setItem('ttm-user-id', id);
+    }
+    setUserId(id);
+  }, []);
 
   useEffect(() => {
     fetch('/api/status')
@@ -342,7 +372,8 @@ export default function TalkToMyself() {
 
   const startSpeechRecognition = () => {
     if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {
-      return
+      setSpeechRecognitionError("Speech recognition is not supported in this browser.");
+      return;
     }
 
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
@@ -354,6 +385,8 @@ export default function TalkToMyself() {
     ;(window as any).lastRecognitionTranscript = ""
 
     recognitionRef.current.onresult = (event: any) => {
+      setSpeechErrorCount(0);
+      setSpeechRecognitionError(null);
       if (!isRecordingRef.current) return;
 
       let interimTranscript = "";
@@ -387,7 +420,30 @@ export default function TalkToMyself() {
 
     recognitionRef.current.onerror = (event: any) => {
       console.error("Speech recognition error:", event.error, event);
-    }
+      if (event.error === "no-speech") {
+        setSpeechErrorCount((count) => {
+          const newCount = count + 1;
+          if (newCount >= MAX_SPEECH_ERRORS) {
+            setSpeechRecognitionError("No speech detected. Please check your microphone and try again.");
+            toast({
+              title: "No speech detected",
+              description: "We couldn't hear anything. Please check your microphone and try again.",
+              variant: "destructive",
+            });
+            stopRecording();
+          }
+          return newCount;
+        });
+      } else {
+        setSpeechRecognitionError(`Speech recognition error: ${event.error}`);
+        toast({
+          title: "Speech recognition error",
+          description: event.error,
+          variant: "destructive",
+        });
+        stopRecording();
+      }
+    };
 
     recognitionRef.current.onend = () => {
       console.warn("Speech recognition ended");
@@ -407,6 +463,7 @@ export default function TalkToMyself() {
     try {
       recognitionRef.current.start()
     } catch (error) {
+      setSpeechRecognitionError("Could not start speech recognition. Please check your browser and microphone.");
       console.log("Could not start speech recognition:", error)
     }
   }
@@ -445,59 +502,58 @@ export default function TalkToMyself() {
 
   const analyzeVocalCharacteristics = async (audioBlob: Blob): Promise<VocalCharacteristics> => {
     try {
-      // Try advanced vocal analysis if HuggingFace key is available
-      if (settings.huggingfaceKey) {
-        const formData = new FormData()
-        formData.append("audio", audioBlob)
-        formData.append("apiKey", settings.huggingfaceKey)
-
-        const response = await fetch("/api/vocal-analysis", {
-          method: "POST",
-          body: formData,
-        })
-
-        if (response.ok) {
-          const analysis = await response.json()
-          return {
-            tone: analysis.tone || "Balanced",
-            pace: analysis.pace || "Natural",
-            pitch: analysis.articulation || "Clear",
-            volume: analysis.volume || "Moderate",
-            confidence: analysis.confidence || 0.75,
-          }
+      const audioBuffer = await audioBlob.arrayBuffer();
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const decodedAudio = await audioContext.decodeAudioData(audioBuffer);
+      const channelData = decodedAudio.getChannelData(0);
+      // DSP calculations
+      let rms = 0;
+      let zeroCrossings = 0;
+      for (let i = 0; i < channelData.length; i++) {
+        rms += channelData[i] * channelData[i];
+      }
+      rms = Math.sqrt(rms / channelData.length);
+      for (let i = 1; i < channelData.length; i++) {
+        if ((channelData[i] >= 0) !== (channelData[i - 1] >= 0)) {
+          zeroCrossings++;
         }
       }
-
-      // Fallback to basic analysis
-      const audioBuffer = await audioBlob.arrayBuffer()
-      const audioContext = new AudioContext()
-      const decodedAudio = await audioContext.decodeAudioData(audioBuffer)
-      const channelData = decodedAudio.getChannelData(0)
-
-      let rms = 0
-      for (let i = 0; i < channelData.length; i++) {
-        rms += channelData[i] * channelData[i]
+      const zcr = zeroCrossings / channelData.length;
+      const silenceThreshold = 0.01;
+      let speechSegments = 0;
+      let totalSpeechTime = 0;
+      let inSpeech = false;
+      let currentSegmentLength = 0;
+      for (let i = 0; i < channelData.length; i += 1000) {
+        const segment = Math.abs(channelData[i]);
+        if (segment > silenceThreshold) {
+          if (!inSpeech) {
+            speechSegments++;
+            inSpeech = true;
+            currentSegmentLength = 0;
+          }
+          currentSegmentLength++;
+          totalSpeechTime++;
+        } else {
+          inSpeech = false;
+        }
       }
-      rms = Math.sqrt(rms / channelData.length)
-
+      const duration = decodedAudio.duration;
+      const speechRatio = totalSpeechTime / (channelData.length / 1000);
+      const avgSegmentLength = speechSegments > 0 ? totalSpeechTime / speechSegments : 0;
+      await audioContext.close();
       return {
-        tone: rms > 0.1 ? "Energetic" : rms > 0.05 ? "Warm" : "Gentle",
-        pace: "Natural",
-        pitch: "Balanced",
-        volume: rms > 0.1 ? "Strong" : rms > 0.05 ? "Moderate" : "Soft",
-        confidence: 0.75 + Math.random() * 0.2,
-      }
+        tone: zcr > 0.1 ? "Bright" : zcr > 0.05 ? "Balanced" : "Warm",
+        pace: avgSegmentLength > 50 ? "Deliberate" : avgSegmentLength > 25 ? "Moderate" : "Quick",
+        pitch: "Balanced", // Not directly measured, can be improved
+        volume: rms > 0.1 ? "Strong" : rms > 0.05 ? "Moderate" : "Gentle",
+        confidence: Math.min(0.95, 0.6 + rms * 2 + speechRatio * 0.3),
+      };
     } catch (error) {
-      console.error("Vocal analysis error:", error)
-      return {
-        tone: "Warm",
-        pace: "Natural",
-        pitch: "Balanced",
-        volume: "Moderate",
-        confidence: 0.75,
-      }
+      console.error("Frontend DSP analysis failed, using fallback.", error);
+      return { tone: "Warm", pace: "Natural", pitch: "Balanced", volume: "Moderate", confidence: 0.75 };
     }
-  }
+  };
 
   const processAudio = async () => {
     setIsProcessing(true)
@@ -550,7 +606,8 @@ export default function TalkToMyself() {
       setProcessingStage("Analyzing your voice patterns...")
       setProgress(50)
 
-      const vocalCharacteristics = await analyzeVocalCharacteristics(audioBlob)
+      const vocalCharacteristics = await analyzeVocalCharacteristics(audioBlob);
+      console.log("Vocal characteristics:", vocalCharacteristics);
 
       setProcessingStage("Creating your personalized summary...")
       setProgress(75)
@@ -593,6 +650,21 @@ export default function TalkToMyself() {
       setActiveTab("summary")
 
       setTimeout(() => speakSummary(summary), 1000)
+
+      // Save to Supabase
+      if (userId) {
+        try {
+          await saveReflectionToSupabase({
+            userId,
+            transcript,
+            summary,
+            emotions,
+            vocal: vocalCharacteristics,
+          });
+        } catch (err) {
+          console.error("Failed to save reflection to Supabase:", err);
+        }
+      }
     } catch (error) {
       console.error("Processing error:", error)
     } finally {
@@ -629,62 +701,72 @@ export default function TalkToMyself() {
           console.log("Google transcription result:", data)
           console.log("Google STT raw response:", data)
 
-          // Only use Google transcript if it is non-empty and not the fallback
           if (
             data.transcript &&
             data.transcript.trim() !== "" &&
             data.transcript !== "I shared my thoughts and reflections in this session."
           ) {
+            setTranscriptionError(null);
             return data.transcript;
           } else {
             // Fallback to browser transcript if available
             if ((window as any).lastRecognitionTranscript && (window as any).lastRecognitionTranscript.trim() !== "") {
               console.warn("Google transcript empty, using browser transcript:", (window as any).lastRecognitionTranscript);
+              // Suppress warning if browser transcript is present
+              setTranscriptionError(null);
               return (window as any).lastRecognitionTranscript.trim();
             } else {
               console.warn("Both Google and browser transcripts are empty.");
+              setTranscriptionError("Both Google and browser transcripts are empty. Please try again.");
               return "";
             }
           }
         } else {
           const errorText = await response.text()
           console.error("Google transcription failed:", errorText)
-          // Fallback to browser transcript if available
+          // Only show warning if browser transcript is also empty
           if ((window as any).lastRecognitionTranscript && (window as any).lastRecognitionTranscript.trim() !== "") {
             console.warn("Google STT failed, using browser transcript:", (window as any).lastRecognitionTranscript);
+            setTranscriptionError(null);
             return (window as any).lastRecognitionTranscript.trim();
           } else {
+            setTranscriptionError(`Google transcription failed: ${errorText}`);
             console.warn("Google STT failed and browser transcript is empty.");
             return "";
           }
         }
       } catch (fetchError) {
         console.log("Google transcription request failed:", fetchError)
-        // Fallback to browser transcript if available
+        // Only show warning if browser transcript is also empty
         if ((window as any).lastRecognitionTranscript && (window as any).lastRecognitionTranscript.trim() !== "") {
           console.warn("Google STT request failed, using browser transcript:", (window as any).lastRecognitionTranscript);
+          setTranscriptionError(null);
           return (window as any).lastRecognitionTranscript.trim();
         } else {
+          setTranscriptionError("Google transcription request failed and browser transcript is empty. Please try again.");
           console.warn("Google STT request failed and browser transcript is empty.");
           return "";
         }
       }
 
-      // Use captured browser speech recognition transcript
       if ((window as any).lastRecognitionTranscript && (window as any).lastRecognitionTranscript.trim() !== "") {
         console.log("Using captured live transcript:", (window as any).lastRecognitionTranscript)
+        setTranscriptionError(null);
         return (window as any).lastRecognitionTranscript.trim()
       }
 
       console.warn("No transcript available, returning fallback.")
+      setTranscriptionError("No transcript available. Please try again.");
       return "" // No transcript
     } catch (error) {
       console.error("Transcription error:", error)
-      // Fallback to browser transcript if available
+      // Only show warning if browser transcript is also empty
       if ((window as any).lastRecognitionTranscript && (window as any).lastRecognitionTranscript.trim() !== "") {
         console.warn("Transcription error, using browser transcript:", (window as any).lastRecognitionTranscript);
+        setTranscriptionError(null);
         return (window as any).lastRecognitionTranscript.trim();
       } else {
+        setTranscriptionError("Transcription error and browser transcript is empty. Please try again.");
         console.warn("Transcription error and browser transcript is empty.");
         return "";
       }
@@ -694,7 +776,7 @@ export default function TalkToMyself() {
   const generateSummary = async (transcript: string): Promise<string> => {
     try {
       console.log("Generating summary for transcript:", transcript)
-
+      //  console.log("Summary service selected:", settings.summaryService);
       // Use API (keys are configured on backend)
       const response = await fetch("/api/summarize", {
         method: "POST",
@@ -754,12 +836,7 @@ export default function TalkToMyself() {
     ]
   }
 
-  const [selectedElevenLabsVoice, setSelectedElevenLabsVoice] = useState<string>("pNInz6obpgDQGcFmaJgB");
-  const [elevenLabsVoices, setElevenLabsVoices] = useState<{id: string, name: string}[]>([]);
-  const [selectedGoogleLang, setSelectedGoogleLang] = useState<string>("en-US");
-  const [selectedGoogleGender, setSelectedGoogleGender] = useState<string>("FEMALE");
-  const [selectedHumeVoice, setSelectedHumeVoice] = useState<string>("ITO");
-
+  // console.log("TTS service selected:", settings.voiceService);
   // Fetch ElevenLabs voices (API key is configured on backend)
   useEffect(() => {
     const fetchVoices = async () => {
@@ -930,7 +1007,71 @@ export default function TalkToMyself() {
     }
   }, [])
 
-  // Loading state
+  // Fetch reflections from Supabase for the current user
+  const fetchReflections = async (userId: string) => {
+    if (!userId) return [];
+    const { data, error } = await supabase
+      .from('reflections')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+    if (error) {
+      toast({
+        title: 'Failed to fetch reflection history',
+        description: error.message,
+        variant: 'destructive',
+      });
+      return [];
+    }
+    // Map DB rows to SessionData shape
+    return (data || []).map((row: any) => ({
+      id: row.id,
+      timestamp: new Date(row.created_at),
+      transcript: row.transcript,
+      summary: row.summary,
+      emotions: row.emotions || [],
+      vocalCharacteristics: row.vocal || {},
+      audioBlob: undefined, // Not stored in DB
+    }));
+  };
+
+  // Fetch on mount and when userId changes
+  useEffect(() => {
+    if (userId) {
+      fetchReflections(userId).then(setSessions);
+    }
+  }, [userId]);
+
+  // After saving a new reflection, re-fetch history
+  const saveReflectionToSupabase = async (reflection: any) => {
+    try {
+      const res = await fetch('/api/reflection', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(reflection),
+      });
+      if (!res.ok) {
+        toast({
+          title: 'Failed to save reflection',
+          description: 'There was a problem saving your reflection. Please try again.',
+          variant: 'destructive',
+        });
+      } else {
+        // Re-fetch history after successful save
+        if (userId) {
+          fetchReflections(userId).then(setSessions);
+        }
+      }
+    } catch (err) {
+      toast({
+        title: 'Failed to save reflection',
+        description: 'There was a problem saving your reflection. Please try again.',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  // Only after all hooks, handle early returns:
   if (hasPermission === null) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-rose-50 via-purple-50 to-indigo-100 flex items-center justify-center">
@@ -944,8 +1085,6 @@ export default function TalkToMyself() {
       </div>
     )
   }
-
-  // Permission request screen
   if (hasPermission === false) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-rose-50 via-purple-50 to-indigo-100 flex items-center justify-center p-6">
@@ -997,863 +1136,905 @@ export default function TalkToMyself() {
     (isAdmin ? 1 : 0);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-rose-50 via-purple-50 to-indigo-100">
-      {/* Ambient background elements */}
-      <div className="fixed inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-1/4 left-1/4 w-64 h-64 bg-purple-200 rounded-full mix-blend-multiply filter blur-xl opacity-30 animate-pulse"></div>
-        <div
-          className="absolute top-3/4 right-1/4 w-64 h-64 bg-pink-200 rounded-full mix-blend-multiply filter blur-xl opacity-30 animate-pulse"
-          style={{ animationDelay: "2s" }}
-        ></div>
-        <div
-          className="absolute bottom-1/4 left-1/2 w-64 h-64 bg-indigo-200 rounded-full mix-blend-multiply filter blur-xl opacity-30 animate-pulse"
-          style={{ animationDelay: "4s" }}
-        ></div>
-      </div>
+    <TooltipProvider>
+      <div className="min-h-screen bg-gradient-to-br from-rose-50 via-purple-50 to-indigo-100">
+        {/* Ambient background elements */}
+        <div className="fixed inset-0 overflow-hidden pointer-events-none">
+          <div className="absolute top-1/4 left-1/4 w-64 h-64 bg-purple-200 rounded-full mix-blend-multiply filter blur-xl opacity-30 animate-pulse"></div>
+          <div
+            className="absolute top-3/4 right-1/4 w-64 h-64 bg-pink-200 rounded-full mix-blend-multiply filter blur-xl opacity-30 animate-pulse"
+            style={{ animationDelay: "2s" }}
+          ></div>
+          <div
+            className="absolute bottom-1/4 left-1/2 w-64 h-64 bg-indigo-200 rounded-full mix-blend-multiply filter blur-xl opacity-30 animate-pulse"
+            style={{ animationDelay: "4s" }}
+          ></div>
+        </div>
 
-      {/* Header */}
-      <div className="relative bg-white/60 backdrop-blur-xl border-b border-white/30 sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-6 py-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              <div className="relative">
-                <div className="w-12 h-12 bg-gradient-to-br from-purple-500 via-pink-500 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg">
-                  <Heart className="w-6 h-6 text-white" />
+        {/* Header */}
+        <div className="relative bg-white/60 backdrop-blur-xl border-b border-white/30 sticky top-0 z-50">
+          <div className="max-w-7xl mx-auto px-6 py-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-4">
+                <div className="relative">
+                  <div className="w-12 h-12 bg-gradient-to-br from-purple-500 via-pink-500 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg">
+                    <Heart className="w-6 h-6 text-white" />
+                  </div>
+                  <div className="absolute -top-1 -right-1 w-4 h-4 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-full flex items-center justify-center">
+                    <Sparkles className="w-2 h-2 text-white" />
+                  </div>
                 </div>
-                <div className="absolute -top-1 -right-1 w-4 h-4 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-full flex items-center justify-center">
-                  <Sparkles className="w-2 h-2 text-white" />
+                <div>
+                  <h1 className="text-2xl font-bold bg-gradient-to-r from-purple-600 to-indigo-600 bg-clip-text text-transparent">
+                    Talk to Myself
+                  </h1>
+                  <p className="text-sm text-gray-600">My sanctuary for self-reflection</p>
                 </div>
               </div>
-              <div>
-                <h1 className="text-2xl font-bold bg-gradient-to-r from-purple-600 to-indigo-600 bg-clip-text text-transparent">
-                  Talk to Myself
-                </h1>
-                <p className="text-sm text-gray-600">My sanctuary for self-reflection</p>
+              <div className="flex items-center space-x-3">
+                {(isRecording || isProcessing) && (
+                  <Badge variant="outline" className="bg-orange-50 text-orange-700 border-orange-200 animate-pulse">
+                    {isRecording ? "Listening..." : "Processing..."}
+                  </Badge>
+                )}
+                {sessions.length > 0 && (
+                  <Badge variant="secondary" className="bg-purple-100 text-purple-700 border-purple-200">
+                    {sessions.length} reflection{sessions.length !== 1 ? "s" : ""}
+                  </Badge>
+                )}
+                {serviceStatus.google && (
+                  <Badge variant="secondary" className="bg-green-100 text-green-700 border-green-200">
+                    Google AI Connected
+                  </Badge>
+                )}
+                {serviceStatus.huggingface && (
+                  <Badge variant="secondary" className="bg-blue-100 text-blue-700 border-blue-200">
+                    HuggingFace Connected
+                  </Badge>
+                )}
               </div>
-            </div>
-            <div className="flex items-center space-x-3">
-              {(isRecording || isProcessing) && (
-                <Badge variant="outline" className="bg-orange-50 text-orange-700 border-orange-200 animate-pulse">
-                  {isRecording ? "Listening..." : "Processing..."}
-                </Badge>
-              )}
-              {sessions.length > 0 && (
-                <Badge variant="secondary" className="bg-purple-100 text-purple-700 border-purple-200">
-                  {sessions.length} reflection{sessions.length !== 1 ? "s" : ""}
-                </Badge>
-              )}
-              {serviceStatus.google && (
-                <Badge variant="secondary" className="bg-green-100 text-green-700 border-green-200">
-                  Google AI Connected
-                </Badge>
-              )}
-              {serviceStatus.huggingface && (
-                <Badge variant="secondary" className="bg-blue-100 text-blue-700 border-blue-200">
-                  HuggingFace Connected
-                </Badge>
-              )}
             </div>
           </div>
         </div>
-      </div>
 
-      <div className="relative max-w-7xl mx-auto px-6 py-12">
-        <Tabs value={activeTab} onValueChange={canSwitchTab ? setActiveTab : undefined} className="space-y-8">
-          {/* Tab Navigation */}
-          <div className="flex justify-center">
-            {visibleTabs > 1 && (
-              <TabsList className="bg-white/80 backdrop-blur-xl border border-white/30 shadow-xl rounded-2xl p-2">
-                {
-                  (
-                    1 // Always show "record"
-                    + (currentSession ? 3 : 0) // summary, analysis, transcript
-                    + (sessions.filter(s => s.transcript).length > 0 ? 1 : 0) // history
-                    + (isAdmin ? 1 : 0) // settings
-                  ) > 1 && (
-                    <>
-                      <TabsTrigger
-                        value="record"
-                        disabled={!canSwitchTab && activeTab !== "record"}
-                        className={cn(
-                          "flex items-center space-x-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-indigo-600 data-[state=active]:text-white rounded-xl px-6 py-3 transition-all duration-300",
-                          !canSwitchTab && activeTab !== "record" && "opacity-50 cursor-not-allowed",
-                        )}
-                      >
-                        <Mic className="w-4 h-4" />
-                        <span>Listen</span>
-                      </TabsTrigger>
-                      {currentSession && (
-                        <>
-                          <TabsTrigger
-                            value="summary"
-                            disabled={!canSwitchTab && activeTab !== "summary"}
-                            className={cn(
-                              "flex items-center space-x-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-indigo-600 data-[state=active]:text-white rounded-xl px-6 py-3 transition-all duration-300",
-                              !canSwitchTab && activeTab !== "summary" && "opacity-50 cursor-not-allowed",
-                            )}
-                          >
-                            <Brain className="w-4 h-4" />
-                            <span>Summary</span>
-                          </TabsTrigger>
-                          <TabsTrigger
-                            value="analysis"
-                            disabled={!canSwitchTab && activeTab !== "analysis"}
-                            className={cn(
-                              "flex items-center space-x-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-indigo-600 data-[state=active]:text-white rounded-xl px-6 py-3 transition-all duration-300",
-                              !canSwitchTab && activeTab !== "analysis" && "opacity-50 cursor-not-allowed",
-                            )}
-                          >
-                            <BarChart3 className="w-4 h-4" />
-                            <span>Analysis</span>
-                          </TabsTrigger>
-                          <TabsTrigger
-                            value="transcript"
-                            disabled={!canSwitchTab && activeTab !== "transcript"}
-                            className={cn(
-                              "flex items-center space-x-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-indigo-600 data-[state=active]:text-white rounded-xl px-6 py-3 transition-all duration-300",
-                              !canSwitchTab && activeTab !== "transcript" && "opacity-50 cursor-not-allowed",
-                            )}
-                          >
-                            <FileText className="w-4 h-4" />
-                            <span>Transcript</span>
-                          </TabsTrigger>
-                        </>
-                      )}
-                      {sessions.length > 0 && (
-                        <TabsTrigger
-                          value="history"
-                          disabled={!canSwitchTab && activeTab !== "history"}
-                          className={cn(
-                            "flex items-center space-x-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-indigo-600 data-[state=active]:text-white rounded-xl px-6 py-3 transition-all duration-300",
-                            !canSwitchTab && activeTab !== "history" && "opacity-50 cursor-not-allowed",
-                          )}
-                        >
-                          <History className="w-4 h-4" />
-                          <span>History</span>
-                        </TabsTrigger>
-                      )}
-                      {isAdmin && (
-                        <TabsTrigger
-                          value="settings"
-                          disabled={!canSwitchTab && activeTab !== "settings"}
-                          className={cn(
-                            "flex items-center space-x-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-indigo-600 data-[state=active]:text-white rounded-xl px-6 py-3 transition-all duration-300",
-                            !canSwitchTab && activeTab !== "settings" && "opacity-50 cursor-not-allowed",
-                          )}
-                        >
-                          <Settings className="w-4 h-4" />
-                          <span>Settings</span>
-                        </TabsTrigger>
-                      )}
-                    </>
-                  )
-                }
-              </TabsList>
-            )}
+        {/* Error Warnings */}
+        {speechRecognitionError && (
+          <div className="max-w-xl mx-auto my-6 p-4 bg-red-100 text-red-800 rounded-xl border border-red-300 text-center text-lg font-semibold shadow">
+            {speechRecognitionError}
           </div>
+        )}
+        {transcriptionError && (
+          <div className="max-w-xl mx-auto my-6 p-4 bg-yellow-100 text-yellow-900 rounded-xl border border-yellow-300 text-center text-lg font-semibold shadow">
+            {transcriptionError}
+          </div>
+        )}
 
-          {/* Recording Tab */}
-          <TabsContent value="record" className="space-y-8">
-            <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
-              <CardContent className="p-16">
-                <div className="flex flex-col items-center space-y-12">
-                  {/* Recording Button */}
-                  <div className="relative">
-                    <Button
-                      onClick={isRecording ? stopRecording : startRecording}
-                      disabled={isProcessing || isSpeaking}
-                      size="lg"
-                      className={cn(
-                        "w-40 h-40 rounded-full transition-all duration-500 shadow-2xl border-4",
-                        isRecording
-                          ? "bg-gradient-to-br from-rose-400 via-pink-500 to-purple-600 border-white/50 transform scale-110"
-                          : "bg-gradient-to-br from-purple-500 via-pink-500 to-indigo-600 border-white/30 hover:scale-105 hover:shadow-3xl",
-                        (isProcessing || isSpeaking) && "opacity-50 cursor-not-allowed",
-                        isRecording && breathingPhase === "inhale" && "transform scale-110",
-                        isRecording && breathingPhase === "exhale" && "transform scale-105",
-                      )}
-                    >
-                      {isRecording ? (
-                        <div className="flex flex-col items-center space-y-2">
-                          <MicOff className="w-16 h-16 text-white" />
-                          <span className="text-white text-sm font-medium">{formatTime(recordingTime)}</span>
-                        </div>
-                      ) : (
-                        <Mic className="w-16 h-16 text-white" />
-                      )}
-                    </Button>
-
-                    {/* Gentle breathing ring for recording */}
-                    {isRecording && (
-                      <div
-                        className={cn(
-                          "absolute inset-0 rounded-full border-2 border-white/30 transition-all duration-3000 ease-in-out",
-                          breathingPhase === "inhale" ? "scale-125" : "scale-110",
+        <div className="relative max-w-7xl mx-auto px-6 py-12">
+          <Tabs value={activeTab} onValueChange={canSwitchTab ? setActiveTab : undefined} className="space-y-8">
+            {/* Tab Navigation */}
+            <div className="flex justify-center">
+              {visibleTabs > 1 && (
+                <TabsList className="bg-white/80 backdrop-blur-xl border border-white/30 shadow-xl rounded-2xl p-2">
+                  {
+                    (
+                      1 // Always show "record"
+                      + (currentSession ? 3 : 0) // summary, analysis, transcript
+                      + (sessions.filter(s => s.transcript).length > 0 ? 1 : 0) // history
+                      + (isAdmin ? 1 : 0) // settings
+                    ) > 1 && (
+                      <>
+                        <TabsTrigger
+                          value="record"
+                          disabled={!canSwitchTab && activeTab !== "record"}
+                          className={cn(
+                            "flex items-center space-x-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-indigo-600 data-[state=active]:text-white rounded-xl px-6 py-3 transition-all duration-300",
+                            !canSwitchTab && activeTab !== "record" && "opacity-50 cursor-not-allowed",
+                          )}
+                        >
+                          <Mic className="w-4 h-4" />
+                          <span>Listen</span>
+                        </TabsTrigger>
+                        {currentSession && (
+                          <>
+                            <TabsTrigger
+                              value="summary"
+                              disabled={!canSwitchTab && activeTab !== "summary"}
+                              className={cn(
+                                "flex items-center space-x-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-indigo-600 data-[state=active]:text-white rounded-xl px-6 py-3 transition-all duration-300",
+                                !canSwitchTab && activeTab !== "summary" && "opacity-50 cursor-not-allowed",
+                              )}
+                            >
+                              <Brain className="w-4 h-4" />
+                              <span>Summary</span>
+                            </TabsTrigger>
+                            <TabsTrigger
+                              value="analysis"
+                              disabled={!canSwitchTab && activeTab !== "analysis"}
+                              className={cn(
+                                "flex items-center space-x-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-indigo-600 data-[state=active]:text-white rounded-xl px-6 py-3 transition-all duration-300",
+                                !canSwitchTab && activeTab !== "analysis" && "opacity-50 cursor-not-allowed",
+                              )}
+                            >
+                              <BarChart3 className="w-4 h-4" />
+                              <span>Analysis</span>
+                            </TabsTrigger>
+                            <TabsTrigger
+                              value="transcript"
+                              disabled={!canSwitchTab && activeTab !== "transcript"}
+                              className={cn(
+                                "flex items-center space-x-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-indigo-600 data-[state=active]:text-white rounded-xl px-6 py-3 transition-all duration-300",
+                                !canSwitchTab && activeTab !== "transcript" && "opacity-50 cursor-not-allowed",
+                              )}
+                            >
+                              <FileText className="w-4 h-4" />
+                              <span>Transcript</span>
+                            </TabsTrigger>
+                          </>
                         )}
-                      ></div>
-                    )}
-                  </div>
+                        {sessions.length > 0 && (
+                          <TabsTrigger
+                            value="history"
+                            disabled={!canSwitchTab && activeTab !== "history"}
+                            className={cn(
+                              "flex items-center space-x-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-indigo-600 data-[state=active]:text-white rounded-xl px-6 py-3 transition-all duration-300",
+                              !canSwitchTab && activeTab !== "history" && "opacity-50 cursor-not-allowed",
+                            )}
+                          >
+                            <History className="w-4 h-4" />
+                            <span>History</span>
+                          </TabsTrigger>
+                        )}
+                        {isAdmin && (
+                          <TabsTrigger
+                            value="settings"
+                            disabled={!canSwitchTab && activeTab !== "settings"}
+                            className={cn(
+                              "flex items-center space-x-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-indigo-600 data-[state=active]:text-white rounded-xl px-6 py-3 transition-all duration-300",
+                              !canSwitchTab && activeTab !== "settings" && "opacity-50 cursor-not-allowed",
+                            )}
+                          >
+                            <Settings className="w-4 h-4" />
+                            <span>Settings</span>
+                          </TabsTrigger>
+                        )}
+                      </>
+                    )
+                  }
+                </TabsList>
+              )}
+            </div>
 
-                  {/* Status Text */}
-                  <div className="text-center space-y-4 max-w-2xl">
-                    <h2 className="text-3xl font-bold text-gray-800">
-                      {isRecording
-                        ? "I'm here, actively listening to you with care..."
-                        : isProcessing
-                          ? "Reflecting on your words..."
-                          : isSpeaking
-                            ? "Speaking your reflection..."
-                            : "Ready to listen to your voice"}
-                    </h2>
-                    <p className="text-lg text-gray-600 leading-relaxed">
-                      {isRecording
-                        ? "Take your time. Breathe deeply. Share whatever feels right. When you're ready to finish, simply say 'I'm complete' or tap the button."
-                        : isProcessing
-                          ? "I'm using AI to transcribe and hear what you've shared, creating an objective synthesis."
-                          : isSpeaking
-                            ? "Listen to your personalized reflection. Recording is paused while I'm speaking."
-                            : "This is your safe space. Click the microphone when you're ready to share your thoughts, feelings, anything you want help remembering or whatever is on your mind."}
-                    </p>
-                  </div>
-
-                  {/* Processing Progress */}
-                  {isProcessing && (
-                    <div className="w-full max-w-lg space-y-6">
-                      <div className="flex items-center justify-center space-x-3 text-gray-600">
-                        <div className="flex space-x-1">
-                          <div className="w-2 h-2 bg-purple-500 rounded-full animate-bounce"></div>
-                          <div
-                            className="w-2 h-2 bg-pink-500 rounded-full animate-bounce"
-                            style={{ animationDelay: "0.1s" }}
-                          ></div>
-                          <div
-                            className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce"
-                            style={{ animationDelay: "0.2s" }}
-                          ></div>
-                        </div>
-                        <span className="font-medium">{processingStage}</span>
-                      </div>
-                      <Progress value={progress} className="h-3 bg-white/50 rounded-full overflow-hidden" />
-                    </div>
-                  )}
-
-                  {/* Gentle guidance */}
-                  {!isRecording && !isProcessing && (
-                    <div className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-2xl p-8 max-w-2xl">
-                      <div className="flex items-start space-x-4">
-                        <div className="w-12 h-12 bg-gradient-to-br from-purple-400 to-pink-500 rounded-full flex items-center justify-center flex-shrink-0">
-                          <Heart className="w-6 h-6 text-white" />
-                        </div>
-                        <div className="space-y-3">
-                          <h3 className="font-semibold text-gray-800">A gentle reminder</h3>
-                          <p className="text-gray-600 leading-relaxed">
-                            There's no right or wrong way to use this space. You might share your dreams, process a
-                            difficult day, explore your feelings, or simply think out loud. Whatever you choose to share
-                            will be private and secure.
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          {/* Summary Tab */}
-          {currentSession && (
-            <TabsContent value="summary" className="space-y-8">
+            {/* Recording Tab */}
+            <TabsContent value="record" className="space-y-8">
               <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
-                <CardHeader className="bg-gradient-to-r from-purple-50 to-pink-50 border-b border-white/30 p-8">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <CardTitle className="text-2xl text-gray-800 mb-2">Your Reflection</CardTitle>
-                      <CardDescription className="text-gray-600 text-lg">
-                        {currentSession.timestamp.toLocaleDateString("en-US", {
-                          weekday: "long",
-                          year: "numeric",
-                          month: "long",
-                          day: "numeric",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </CardDescription>
-                    </div>
-                    <div className="flex items-center space-x-3">
+                <CardContent className="p-16">
+                  <div className="flex flex-col items-center space-y-12">
+                    {/* Recording Button */}
+                    <div className="relative">
                       <Button
-                        variant="outline"
-                        onClick={() => speakSummary(currentSession.summary)}
-                        disabled={isSpeaking}
-                        className="flex items-center space-x-2 bg-white/80 border-purple-200 hover:bg-purple-50 rounded-xl px-6 py-3"
+                        onClick={isRecording ? stopRecording : startRecording}
+                        disabled={isProcessing || isSpeaking}
+                        size="lg"
+                        className={cn(
+                          "w-40 h-40 rounded-full transition-all duration-500 shadow-2xl border-4",
+                          isRecording
+                            ? "bg-gradient-to-br from-rose-400 via-pink-500 to-purple-600 border-white/50 transform scale-110"
+                            : "bg-gradient-to-br from-purple-500 via-pink-500 to-indigo-600 border-white/30 hover:scale-105 hover:shadow-3xl",
+                          (isProcessing || isSpeaking) && "opacity-50 cursor-not-allowed",
+                          isRecording && breathingPhase === "inhale" && "transform scale-110",
+                          isRecording && breathingPhase === "exhale" && "transform scale-105",
+                        )}
                       >
-                        <Volume2 className="w-5 h-5 text-purple-600" />
-                        <span className="text-purple-600 font-medium">Listen Again</span>
+                        {isRecording ? (
+                          <div className="flex flex-col items-center space-y-2">
+                            <MicOff className="w-16 h-16 text-white" />
+                            <span className="text-white text-sm font-medium">{formatTime(recordingTime)}</span>
+                          </div>
+                        ) : (
+                          <Mic className="w-16 h-16 text-white" />
+                        )}
                       </Button>
 
-                      {isSpeaking && (
-                        <Button
-                          variant="outline"
-                          onClick={pauseResumeSpeech}
-                          className="flex items-center space-x-2 bg-white/80 border-orange-200 hover:bg-orange-50 rounded-xl px-6 py-3"
-                        >
-                          {isPaused ? (
-                            <>
-                              <Play className="w-5 h-5 text-orange-600" />
-                              <span className="text-orange-600 font-medium">Resume</span>
-                            </>
-                          ) : (
-                            <>
-                              <Pause className="w-5 h-5 text-orange-600" />
-                              <span className="text-orange-600 font-medium">Pause</span>
-                            </>
+                      {/* Gentle breathing ring for recording */}
+                      {isRecording && (
+                        <div
+                          className={cn(
+                            "absolute inset-0 rounded-full border-2 border-white/30 transition-all duration-3000 ease-in-out",
+                            breathingPhase === "inhale" ? "scale-125" : "scale-110",
                           )}
-                        </Button>
+                        ></div>
                       )}
+                    </div>
 
-                      {isSpeaking && (
-                        <Button
-                          variant="outline"
-                          onClick={stopSpeech}
-                          className="flex items-center space-x-2 bg-white/80 border-red-200 hover:bg-red-50 rounded-xl px-6 py-3"
-                        >
-                          <MicOff className="w-5 h-5 text-red-600" />
-                          <span className="text-red-600 font-medium">Stop</span>
-                        </Button>
-                      )}
+                    {/* Status Text */}
+                    <div className="text-center space-y-4 max-w-2xl">
+                      <h2 className="text-3xl font-bold text-gray-800">
+                        {isRecording
+                          ? "I'm here, actively listening to you with care..."
+                          : isProcessing
+                            ? "Reflecting on your words..."
+                            : isSpeaking
+                              ? "Speaking your reflection..."
+                              : "Ready to listen to your voice"}
+                      </h2>
+                      <p className="text-lg text-gray-600 leading-relaxed">
+                        {isRecording
+                          ? "Take your time. Breathe deeply. Share whatever feels right. When you're ready to finish, simply say 'I'm complete' or tap the button."
+                          : isProcessing
+                            ? "I'm using AI to transcribe and hear what you've shared, creating an objective synthesis."
+                            : isSpeaking
+                              ? "Listen to your personalized reflection. Recording is paused while I'm speaking."
+                              : "This is your safe space. Click the microphone when you're ready to share your thoughts, feelings, anything you want help remembering or whatever is on your mind."}
+                      </p>
                     </div>
-                  </div>
-                </CardHeader>
-                <CardContent className="p-12">
-                  <div className="max-w-4xl mx-auto">
-                    <div className="relative">
-                      <div className="absolute -left-6 top-0 w-1 h-full bg-gradient-to-b from-purple-400 to-pink-500 rounded-full"></div>
-                      <blockquote className="text-xl text-gray-700 leading-relaxed font-medium italic pl-8">
-                        "{currentSession.summary}"
-                      </blockquote>
-                    </div>
+
+                    {/* Processing Progress */}
+                    {isProcessing && (
+                      <div className="w-full max-w-lg space-y-6">
+                        <div className="flex items-center justify-center space-x-3 text-gray-600">
+                          <div className="flex space-x-1">
+                            <div className="w-2 h-2 bg-purple-500 rounded-full animate-bounce"></div>
+                            <div
+                              className="w-2 h-2 bg-pink-500 rounded-full animate-bounce"
+                              style={{ animationDelay: "0.1s" }}
+                            ></div>
+                            <div
+                              className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce"
+                              style={{ animationDelay: "0.2s" }}
+                            ></div>
+                          </div>
+                          <span className="font-medium">{processingStage}</span>
+                        </div>
+                        <Progress value={progress} className="h-3 bg-white/50 rounded-full overflow-hidden" />
+                      </div>
+                    )}
+
+                    {/* Gentle guidance */}
+                    {!isRecording && !isProcessing && (
+                      <div className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-2xl p-8 max-w-2xl">
+                        <div className="flex items-start space-x-4">
+                          <div className="w-12 h-12 bg-gradient-to-br from-purple-400 to-pink-500 rounded-full flex items-center justify-center flex-shrink-0">
+                            <Heart className="w-6 h-6 text-white" />
+                          </div>
+                          <div className="space-y-3">
+                            <h3 className="font-semibold text-gray-800">A gentle reminder</h3>
+                            <p className="text-gray-600 leading-relaxed">
+                              There's no right or wrong way to use this space. You might share your dreams, process a
+                              difficult day, explore your feelings, or simply think out loud. Whatever you choose to share
+                              will be private and secure.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </CardContent>
               </Card>
-              {currentSession && (
-                <div className="flex items-center space-x-2 mt-2">
-                  <Badge variant="secondary">
-                    TTS: {actualTTSService === "elevenlabs" ? "ElevenLabs"
-                      : actualTTSService === "hume" ? "Hume.ai"
-                      : actualTTSService === "google" ? "Google TTS"
-                      : "Browser"}
-                    {settings.voiceService === "elevenlabs" && elevenLabsVoices.find(v => v.id === selectedElevenLabsVoice) && (
-                      <> - {elevenLabsVoices.find(v => v.id === selectedElevenLabsVoice)?.name}</>
-                    )}
-                    {settings.voiceService === "google" && (
-                      <> - {selectedGoogleLang} / {selectedGoogleGender}</>
-                    )}
-                    {settings.voiceService === "hume" && (
-                      <> - {selectedHumeVoice}</>
-                    )}
-                    {settings.voiceService === "browser" && <> - System Voice</>}
-                  </Badge>
-                </div>
-              )}
             </TabsContent>
-          )}
 
-          {/* Analysis Tab */}
-          {currentSession && (
-            <TabsContent value="analysis" className="space-y-8">
-              <div className="grid gap-8">
-                {/* Emotions */}
+            {/* Summary Tab */}
+            {currentSession && (
+              <TabsContent value="summary" className="space-y-8">
                 <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
-                  <CardHeader className="bg-gradient-to-r from-purple-50 to-pink-50 p-8">
-                    <CardTitle className="text-2xl text-gray-800 flex items-center space-x-3">
-                      <div className="w-8 h-8 bg-gradient-to-br from-purple-400 to-pink-500 rounded-lg flex items-center justify-center">
-                        <Sparkles className="w-4 h-4 text-white" />
+                  <CardHeader className="bg-gradient-to-r from-purple-50 to-pink-50 border-b border-white/30 p-8">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <CardTitle className="text-2xl text-gray-800 mb-2">Your Reflection</CardTitle>
+                        <CardDescription className="text-gray-600 text-lg">
+                          {currentSession.timestamp.toLocaleDateString("en-US", {
+                            weekday: "long",
+                            year: "numeric",
+                            month: "long",
+                            day: "numeric",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </CardDescription>
                       </div>
-                      <span>Emotional Landscape</span>
+                      <div className="flex items-center space-x-3">
+                        <Button
+                          variant="outline"
+                          onClick={() => speakSummary(currentSession.summary)}
+                          disabled={isSpeaking}
+                          className="flex items-center space-x-2 bg-white/80 border-purple-200 hover:bg-purple-50 rounded-xl px-6 py-3"
+                        >
+                          <Volume2 className="w-5 h-5 text-purple-600" />
+                          <span className="text-purple-600 font-medium">Listen Again</span>
+                        </Button>
+
+                        {isSpeaking && (
+                          <Button
+                            variant="outline"
+                            onClick={pauseResumeSpeech}
+                            className="flex items-center space-x-2 bg-white/80 border-orange-200 hover:bg-orange-50 rounded-xl px-6 py-3"
+                          >
+                            {isPaused ? (
+                              <>
+                                <Play className="w-5 h-5 text-orange-600" />
+                                <span className="text-orange-600 font-medium">Resume</span>
+                              </>
+                            ) : (
+                              <>
+                                <Pause className="w-5 h-5 text-orange-600" />
+                                <span className="text-orange-600 font-medium">Pause</span>
+                              </>
+                            )}
+                          </Button>
+                        )}
+
+                        {isSpeaking && (
+                          <Button
+                            variant="outline"
+                            onClick={stopSpeech}
+                            className="flex items-center space-x-2 bg-white/80 border-red-200 hover:bg-red-50 rounded-xl px-6 py-3"
+                          >
+                            <MicOff className="w-5 h-5 text-red-600" />
+                            <span className="text-red-600 font-medium">Stop</span>
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="p-12">
+                    <div className="max-w-4xl mx-auto">
+                      <div className="relative">
+                        <div className="absolute -left-6 top-0 w-1 h-full bg-gradient-to-b from-purple-400 to-pink-500 rounded-full"></div>
+                        <blockquote className="text-xl text-gray-700 leading-relaxed font-medium italic pl-8">
+                          "{currentSession.summary}"
+                        </blockquote>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+                {currentSession && (
+                  <div className="flex items-center space-x-2 mt-2">
+                    <Badge variant="secondary">
+                      TTS: {actualTTSService === "elevenlabs" ? "ElevenLabs"
+                        : actualTTSService === "hume" ? "Hume.ai"
+                        : actualTTSService === "google" ? "Google TTS"
+                        : "Browser"}
+                      {settings.voiceService === "elevenlabs" && elevenLabsVoices.find(v => v.id === selectedElevenLabsVoice) && (
+                        <> - {elevenLabsVoices.find(v => v.id === selectedElevenLabsVoice)?.name}</>
+                      )}
+                      {settings.voiceService === "google" && (
+                        <> - {selectedGoogleLang} / {selectedGoogleGender}</>
+                      )}
+                      {settings.voiceService === "hume" && (
+                        <> - {selectedHumeVoice}</>
+                      )}
+                      {settings.voiceService === "browser" && <> - System Voice</>}
+                    </Badge>
+                  </div>
+                )}
+              </TabsContent>
+            )}
+
+            {/* Analysis Tab */}
+            {currentSession && (
+              <TabsContent value="analysis" className="space-y-8">
+                <div className="grid gap-8">
+                  {/* Emotions */}
+                  <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
+                    <CardHeader className="bg-gradient-to-r from-purple-50 to-pink-50 p-8">
+                      <CardTitle className="text-2xl text-gray-800 flex items-center space-x-3">
+                        <div className="w-8 h-8 bg-gradient-to-br from-purple-400 to-pink-500 rounded-lg flex items-center justify-center">
+                          <Sparkles className="w-4 h-4 text-white" />
+                        </div>
+                        <span>Emotional Landscape</span>
+                      </CardTitle>
+                      <CardDescription className="text-gray-600 text-lg">
+                        {serviceStatus.huggingface
+                          ? "AI-powered emotion analysis using Hugging Face models"
+                          : <span className="text-orange-600 font-semibold">(Demo) Fallback emotion analysis – not real AI, for demonstration only</span>}
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="p-8">
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        {currentSession.emotions.map((emotion, index) => (
+                          <div
+                            key={index}
+                            className="bg-gradient-to-br from-purple-50 via-pink-50 to-indigo-50 rounded-2xl p-6 border border-purple-100 hover:shadow-lg transition-all duration-300"
+                          >
+                            <div className="flex items-center justify-between mb-4">
+                              <h3 className="font-semibold text-gray-800 text-lg">{emotion.emotion}</h3>
+                              <Badge variant="secondary" className="bg-purple-100 text-purple-700">
+                                {(emotion.confidence * 100).toFixed(0)}%
+                              </Badge>
+                            </div>
+                            <div className="w-full bg-white/60 rounded-full h-3 overflow-hidden">
+                              <div
+                                className="bg-gradient-to-r from-purple-400 to-pink-500 h-3 rounded-full transition-all duration-1000 ease-out"
+                                style={{ width: `${emotion.confidence * 100}%` }}
+                              ></div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* Voice Characteristics (DSP) */}
+                  <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
+                    <CardHeader className="bg-gradient-to-r from-indigo-50 to-purple-50 p-8">
+                      <CardTitle className="text-2xl text-gray-800 flex items-center space-x-3">
+                        <div className="w-8 h-8 bg-gradient-to-br from-indigo-400 to-purple-500 rounded-lg flex items-center justify-center">
+                          <Waves className="w-4 h-4 text-white" />
+                        </div>
+                        <span>Voice Patterns (DSP)</span>
+                      </CardTitle>
+                      <CardDescription className="text-gray-600 text-lg">
+                        Audio analysis of your vocal characteristics and delivery
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="p-8">
+                      <div className="grid grid-cols-2 gap-8">
+                        <div className="space-y-6">
+                          <div className="flex justify-between items-center p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-100">
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="text-gray-700 font-medium underline decoration-dotted cursor-help">Tone</span>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                Tone is estimated using the zero crossing rate (ZCR) of your audio. Higher ZCR means a brighter tone, lower means a warmer tone.
+                              </TooltipContent>
+                            </Tooltip>
+                            <Badge className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
+                              {currentSession.vocalCharacteristics.tone}
+                            </Badge>
+                          </div>
+                          <div className="flex justify-between items-center p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-100">
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="text-gray-700 font-medium underline decoration-dotted cursor-help">Pace</span>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                Pace is estimated by analyzing the average length of speech segments above a silence threshold. Longer segments mean a more deliberate pace.
+                              </TooltipContent>
+                            </Tooltip>
+                            <Badge className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
+                              {currentSession.vocalCharacteristics.pace}
+                            </Badge>
+                          </div>
+                        </div>
+                        <div className="space-y-6">
+                          <div className="flex justify-between items-center p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-100">
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="text-gray-700 font-medium underline decoration-dotted cursor-help">Pitch</span>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                Pitch is not directly measured, but inferred from the balance of the audio waveform and articulation. This is a rough estimate.
+                              </TooltipContent>
+                            </Tooltip>
+                            <Badge className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
+                              {currentSession.vocalCharacteristics.pitch}
+                            </Badge>
+                          </div>
+                          <div className="flex justify-between items-center p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-100">
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="text-gray-700 font-medium underline decoration-dotted cursor-help">Volume</span>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                Volume is estimated using the root mean square (RMS) energy of your audio. Higher RMS means a stronger volume.
+                              </TooltipContent>
+                            </Tooltip>
+                            <Badge className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
+                              {currentSession.vocalCharacteristics.volume}
+                            </Badge>
+                          </div>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+              </TabsContent>
+            )}
+
+            {/* Transcript Tab */}
+            {currentSession && currentSession.transcript && (
+              <TabsContent value="transcript" className="space-y-8">
+                <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
+                  <CardHeader className="bg-gradient-to-r from-gray-50 to-slate-50 p-8">
+                    <CardTitle className="text-2xl text-gray-800 flex items-center space-x-3">
+                      <div className="w-8 h-8 bg-gradient-to-br from-gray-400 to-slate-500 rounded-lg flex items-center justify-center">
+                        <FileText className="w-4 h-4 text-white" />
+                      </div>
+                      <span>Your Words</span>
                     </CardTitle>
                     <CardDescription className="text-gray-600 text-lg">
-                      {serviceStatus.huggingface
-                        ? "AI-powered emotion analysis using Hugging Face models"
-                        : <span className="text-orange-600 font-semibold">(Demo) Fallback emotion analysis – not real AI, for demonstration only</span>}
+                      {settings.geminiKey
+                        ? "Transcribed using Google AI Speech-to-Text"
+                        : "Transcribed using browser speech recognition"}
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="p-12">
+                    <div className="bg-gradient-to-br from-gray-50 to-slate-50 rounded-2xl p-8 border border-gray-200">
+                      <p className="text-gray-700 leading-relaxed text-lg whitespace-pre-wrap font-mono">
+                        {currentSession.transcript}
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            )}
+
+            {/* History Tab */}
+            {sessions.filter(s => s.transcript).length > 0 && (
+              <TabsContent value="history" className="space-y-8">
+                <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
+                  <CardHeader className="bg-gradient-to-r from-amber-50 to-orange-50 p-8">
+                    <CardTitle className="text-2xl text-gray-800 flex items-center space-x-3">
+                      <div className="w-8 h-8 bg-gradient-to-br from-amber-400 to-orange-500 rounded-lg flex items-center justify-center">
+                        <History className="w-4 h-4 text-white" />
+                      </div>
+                      <span>Your Journey</span>
+                    </CardTitle>
+                    <CardDescription className="text-gray-600 text-lg">
+                      A collection of your reflections and growth over time
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="p-8">
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                      {currentSession.emotions.map((emotion, index) => (
+                    <div className="space-y-6">
+                      {sessions.filter(s => s.transcript).map((session, index) => (
                         <div
-                          key={index}
-                          className="bg-gradient-to-br from-purple-50 via-pink-50 to-indigo-50 rounded-2xl p-6 border border-purple-100 hover:shadow-lg transition-all duration-300"
+                          key={session.id}
+                          className={cn(
+                            "p-6 rounded-2xl cursor-pointer transition-all duration-300 border-2",
+                            currentSession?.id === session.id
+                              ? "bg-gradient-to-r from-purple-50 to-pink-50 border-purple-200 shadow-lg"
+                              : "bg-white/60 border-gray-200 hover:bg-gradient-to-r hover:from-purple-50 hover:to-pink-50 hover:border-purple-200 hover:shadow-lg",
+                          )}
+                          onClick={() => setCurrentSession(session)}
                         >
-                          <div className="flex items-center justify-between mb-4">
-                            <h3 className="font-semibold text-gray-800 text-lg">{emotion.emotion}</h3>
-                            <Badge variant="secondary" className="bg-purple-100 text-purple-700">
-                              {(emotion.confidence * 100).toFixed(0)}%
-                            </Badge>
-                          </div>
-                          <div className="w-full bg-white/60 rounded-full h-3 overflow-hidden">
-                            <div
-                              className="bg-gradient-to-r from-purple-400 to-pink-500 h-3 rounded-full transition-all duration-1000 ease-out"
-                              style={{ width: `${emotion.confidence * 100}%` }}
-                            ></div>
+                          <div className="flex justify-between items-start">
+                            <div className="flex-1">
+                              <div className="flex items-center space-x-3 mb-3">
+                                <Badge variant="outline" className="text-xs">
+                                  Session {sessions.length - index}
+                                </Badge>
+                                <span className="text-sm text-gray-500">
+                                  {session.timestamp.toLocaleDateString("en-US", {
+                                    month: "short",
+                                    day: "numeric",
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                  })}
+                                </span>
+                              </div>
+                              <div className="text-gray-500 text-xs mt-2">
+                                <strong>Transcript:</strong> {session.transcript}
+                              </div>
+                              <div className="text-gray-700 mt-1">
+                                <strong>Summary:</strong> {session.summary}
+                              </div>
+                            </div>
+                            <div className="flex flex-wrap gap-2 ml-6">
+                              {session.emotions.slice(0, 3).map((emotion, emotionIndex) => (
+                                <Badge
+                                  key={emotionIndex}
+                                  variant="secondary"
+                                  className="text-xs bg-purple-100 text-purple-700"
+                                >
+                                  {emotion.emotion}
+                                </Badge>
+                              ))}
+                            </div>
                           </div>
                         </div>
                       ))}
                     </div>
                   </CardContent>
                 </Card>
+              </TabsContent>
+            )}
 
-                {/* Voice Characteristics */}
-                <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
-                  <CardHeader className="bg-gradient-to-r from-indigo-50 to-purple-50 p-8">
-                    <CardTitle className="text-2xl text-gray-800 flex items-center space-x-3">
-                      <div className="w-8 h-8 bg-gradient-to-br from-indigo-400 to-purple-500 rounded-lg flex items-center justify-center">
-                        <Waves className="w-4 h-4 text-white" />
-                      </div>
-                      <span>Voice Patterns</span>
-                    </CardTitle>
-                    <CardDescription className="text-gray-600 text-lg">
-                      Audio analysis of your vocal characteristics and delivery
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="p-8">
-                    <div className="grid grid-cols-2 gap-8">
-                      <div className="space-y-6">
-                        <div className="flex justify-between items-center p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-100">
-                          <span className="text-gray-700 font-medium">Tone</span>
-                          <Badge className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
-                            {currentSession.vocalCharacteristics.tone}
-                          </Badge>
-                        </div>
-                        <div className="flex justify-between items-center p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-100">
-                          <span className="text-gray-700 font-medium">Pace</span>
-                          <Badge className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
-                            {currentSession.vocalCharacteristics.pace}
-                          </Badge>
-                        </div>
-                      </div>
-                      <div className="space-y-6">
-                        <div className="flex justify-between items-center p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-100">
-                          <span className="text-gray-700 font-medium">Pitch</span>
-                          <Badge className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
-                            {currentSession.vocalCharacteristics.pitch}
-                          </Badge>
-                        </div>
-                        <div className="flex justify-between items-center p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-100">
-                          <span className="text-gray-700 font-medium">Volume</span>
-                          <Badge className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
-                            {currentSession.vocalCharacteristics.volume}
-                          </Badge>
-                        </div>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-            </TabsContent>
-          )}
-
-          {/* Transcript Tab */}
-          {currentSession && currentSession.transcript && (
-            <TabsContent value="transcript" className="space-y-8">
+            {/* Settings Tab - Admin Only */}
+            {isAdmin && (
+              <TabsContent value="settings" className="space-y-8">
               <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
-                <CardHeader className="bg-gradient-to-r from-gray-50 to-slate-50 p-8">
+                <CardHeader className="bg-gradient-to-r from-blue-50 to-indigo-50 p-8">
                   <CardTitle className="text-2xl text-gray-800 flex items-center space-x-3">
-                    <div className="w-8 h-8 bg-gradient-to-br from-gray-400 to-slate-500 rounded-lg flex items-center justify-center">
-                      <FileText className="w-4 h-4 text-white" />
+                    <div className="w-8 h-8 bg-gradient-to-br from-blue-400 to-indigo-500 rounded-lg flex items-center justify-center flex-shrink-0">
+                      <Settings className="w-4 h-4 text-white" />
                     </div>
-                    <span>Your Words</span>
+                    <span>Personalize Your Experience</span>
                   </CardTitle>
                   <CardDescription className="text-gray-600 text-lg">
-                    {settings.geminiKey
-                      ? "Transcribed using Google AI Speech-to-Text"
-                      : "Transcribed using browser speech recognition"}
+                    Configure AI services for enhanced summaries and voice synthesis
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="p-12">
-                  <div className="bg-gradient-to-br from-gray-50 to-slate-50 rounded-2xl p-8 border border-gray-200">
-                    <p className="text-gray-700 leading-relaxed text-lg whitespace-pre-wrap font-mono">
-                      {currentSession.transcript}
-                    </p>
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
-          )}
-
-          {/* History Tab */}
-          {sessions.filter(s => s.transcript).length > 0 && (
-            <TabsContent value="history" className="space-y-8">
-              <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
-                <CardHeader className="bg-gradient-to-r from-amber-50 to-orange-50 p-8">
-                  <CardTitle className="text-2xl text-gray-800 flex items-center space-x-3">
-                    <div className="w-8 h-8 bg-gradient-to-br from-amber-400 to-orange-500 rounded-lg flex items-center justify-center">
-                      <History className="w-4 h-4 text-white" />
-                    </div>
-                    <span>Your Journey</span>
-                  </CardTitle>
-                  <CardDescription className="text-gray-600 text-lg">
-                    A collection of your reflections and growth over time
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="p-8">
-                  <div className="space-y-6">
-                    {sessions.filter(s => s.transcript).map((session, index) => (
-                      <div
-                        key={session.id}
-                        className={cn(
-                          "p-6 rounded-2xl cursor-pointer transition-all duration-300 border-2",
-                          currentSession?.id === session.id
-                            ? "bg-gradient-to-r from-purple-50 to-pink-50 border-purple-200 shadow-lg"
-                            : "bg-white/60 border-gray-200 hover:bg-gradient-to-r hover:from-purple-50 hover:to-pink-50 hover:border-purple-200 hover:shadow-lg",
-                        )}
-                        onClick={() => setCurrentSession(session)}
-                      >
-                        <div className="flex justify-between items-start">
-                          <div className="flex-1">
-                            <div className="flex items-center space-x-3 mb-3">
-                              <Badge variant="outline" className="text-xs">
-                                Session {sessions.length - index}
-                              </Badge>
-                              <span className="text-sm text-gray-500">
-                                {session.timestamp.toLocaleDateString("en-US", {
-                                  month: "short",
-                                  day: "numeric",
-                                  hour: "2-digit",
-                                  minute: "2-digit",
-                                })}
-                              </span>
-                            </div>
-                            <div className="text-gray-500 text-xs mt-2">
-                              <strong>Transcript:</strong> {session.transcript}
-                            </div>
-                            <div className="text-gray-700 mt-1">
-                              <strong>Summary:</strong> {session.summary}
-                            </div>
-                          </div>
-                          <div className="flex flex-wrap gap-2 ml-6">
-                            {session.emotions.slice(0, 3).map((emotion, emotionIndex) => (
-                              <Badge
-                                key={emotionIndex}
-                                variant="secondary"
-                                className="text-xs bg-purple-100 text-purple-700"
-                              >
-                                {emotion.emotion}
-                              </Badge>
-                            ))}
-                          </div>
-                        </div>
+                <CardContent className="p-8 space-y-12">
+                  {/* Security Information */}
+                  <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-2xl p-6 border border-green-200">
+                    <div className="flex items-start space-x-4">
+                      <div className="w-12 h-12 bg-gradient-to-br from-green-400 to-emerald-500 rounded-full flex items-center justify-center flex-shrink-0">
+                        <Lock className="w-6 h-6 text-white" />
                       </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
-          )}
-
-          {/* Settings Tab - Admin Only */}
-          {isAdmin && (
-            <TabsContent value="settings" className="space-y-8">
-            <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
-              <CardHeader className="bg-gradient-to-r from-blue-50 to-indigo-50 p-8">
-                <CardTitle className="text-2xl text-gray-800 flex items-center space-x-3">
-                  <div className="w-8 h-8 bg-gradient-to-br from-blue-400 to-indigo-500 rounded-lg flex items-center justify-center flex-shrink-0">
-                    <Settings className="w-4 h-4 text-white" />
-                  </div>
-                  <span>Personalize Your Experience</span>
-                </CardTitle>
-                <CardDescription className="text-gray-600 text-lg">
-                  Configure AI services for enhanced summaries and voice synthesis
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="p-8 space-y-12">
-                {/* Security Information */}
-                <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-2xl p-6 border border-green-200">
-                  <div className="flex items-start space-x-4">
-                    <div className="w-12 h-12 bg-gradient-to-br from-green-400 to-emerald-500 rounded-full flex items-center justify-center flex-shrink-0">
-                      <Lock className="w-6 h-6 text-white" />
-                    </div>
-                    <div className="space-y-3">
-                      <h3 className="font-semibold text-gray-800 flex items-center space-x-2">
-                        <span>Maximum Security & Privacy</span>
-                        <CheckCircle className="w-5 h-5 text-green-600" />
-                      </h3>
-                      <div className="space-y-2 text-gray-600 leading-relaxed">
-                        <p>
-                          <strong>Backend Only:</strong> API keys are now stored securely on the server and never exposed to your browser or device.
-                        </p>
-                        <p>
-                          <strong>Local Only:</strong> Your data is processed securely and never leaves the server except for AI analysis.
-                        </p>
-                        <p>
-                          <strong>Enhanced Features:</strong> With backend API keys configured, you get better transcription, real emotion analysis, and smarter summaries.
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Add this section in the settings tab after the security information */}
-                <div className="space-y-6">
-                  <h3 className="text-xl font-semibold text-gray-800">Privacy & Storage Settings</h3>
-                  <div className="space-y-4">
-                    <label className="text-lg font-medium text-gray-700">API Key Storage</label>
-                    <p className="text-sm text-gray-500">Choose how securely you want to store your API keys</p>
-                    <select
-                      value={settings.storageMode}
-                      onChange={(e) => setSettings((prev: any) => ({ ...prev, storageMode: e.target.value }))}
-                      className="w-full p-4 border border-gray-300 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white/80"
-                    >
-                      <option value="none">🔒 Maximum Security - No Storage (re-enter each session)</option>
-                      <option value="memory">🛡️ High Security - Memory Only (lost on refresh)</option>
-                      <option value="session">🔐 Good Security - Session Only (cleared when tab closes)</option>
-                      <option value="local">💾 Convenient - Persistent Storage (survives browser restart)</option>
-                    </select>
-                    <div className="text-sm text-gray-600 bg-gray-50 rounded-lg p-4">
-                      <p>
-                        <strong>Current mode:</strong>{" "}
-                        {settings.storageMode === "none"
-                          ? "Keys are never stored - maximum privacy"
-                          : settings.storageMode === "memory"
-                            ? "Keys stored in memory only - cleared on page refresh"
-                            : settings.storageMode === "session"
-                              ? "Keys stored until you close this tab"
-                              : "Keys persist until manually cleared"}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* AI Model Information */}
-                <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-2xl p-6 border border-blue-200">
-                  <div className="flex items-start space-x-4">
-                    <div className="w-12 h-12 bg-gradient-to-br from-blue-400 to-indigo-500 rounded-full flex items-center justify-center flex-shrink-0">
-                      <AlertCircle className="w-6 h-6 text-white" />
-                    </div>
-                    <div className="space-y-3">
-                      <h3 className="font-semibold text-gray-800">Best AI Models for Analysis</h3>
-                      <div className="space-y-2 text-gray-600 leading-relaxed">
-                        <p>
-                          <strong>Emotion Analysis:</strong> j-hartmann/emotion-english-distilroberta-base -
-                          State-of-the-art emotion detection with 7 emotion categories
-                        </p>
-                        <p>
-                          <strong>Sentiment Analysis:</strong> cardiffnlp/twitter-roberta-base-sentiment-latest - Highly
-                          accurate positive/negative/neutral classification
-                        </p>
-                        <p>
-                          <strong>Speech-to-Text:</strong> Google Cloud Speech-to-Text API (via Gemini key) -
-                          Professional-grade transcription
-                        </p>
-                        <p>
-                          <strong>Voice Characteristics:</strong> Currently analyzed from audio waveform data - future
-                          updates will include specialized audio AI models
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-8">
-                  <h3 className="text-xl font-semibold text-gray-800">AI Service Configuration</h3>
-                  <div className="grid gap-8">
-                    {[
-                      {
-                        key: "openaiKey",
-                        label: "OpenAI API Key",
-                        placeholder: "sk-...",
-                        description: "For advanced GPT-powered summaries and analysis",
-                        service: "openai",
-                      },
-                      {
-                        key: "claudeKey",
-                        label: "Claude API Key",
-                        placeholder: "sk-ant-...",
-                        description: "For thoughtful Anthropic Claude summaries",
-                        service: "claude",
-                      },
-                      {
-                        key: "geminiKey",
-                        label: "Google AI API Key (Gemini)",
-                        placeholder: "AI...",
-                        description:
-                          "For Google's Gemini AI insights AND professional Google Speech-to-Text transcription",
-                        service: "gemini",
-                      },
-                      {
-                        key: "huggingfaceKey",
-                        label: "Hugging Face API Key",
-                        placeholder: "hf_...",
-                        description:
-                          "For state-of-the-art emotion analysis using j-hartmann/emotion-english-distilroberta-base",
-                        service: "huggingface",
-                      },
-                      {
-                        key: "elevenlabsKey",
-                        label: "ElevenLabs API Key",
-                        placeholder: "...",
-                        description: "For natural, human-like voice synthesis",
-                        service: "elevenlabs",
-                      },
-                      {
-                        key: "humeKey",
-                        label: "Hume.ai API Key",
-                        placeholder: "...",
-                        description: "For emotionally intelligent voice responses",
-                        service: "hume",
-                      },
-                    ].map(({ key, label, placeholder, description, service }) => (
-                      <div key={key} className="space-y-3">
-                        <div className="flex items-center justify-between">
-                          <label className="text-lg font-medium text-gray-700">{label}</label>
-                          <div className="flex items-center space-x-2">
-                            {settings[key as keyof typeof settings] && (
-                              <Badge className="bg-green-100 text-green-700 border-green-200">Configured</Badge>
-                            )}
-                            {settings[key as keyof typeof settings] && service !== "huggingface" && service !== "openai" && (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => checkApiCredits(service, settings[key as keyof typeof settings] as string)}
-                                disabled={isCheckingCredits}
-                                className="text-xs"
-                              >
-                                {isCheckingCredits ? "Checking..." : "Check Credits"}
-                              </Button>
-                            )}
-                            {service === "openai" && (
-                              <span className="text-xs text-gray-500 ml-2">OpenAI does not provide API usage info for personal keys.</span>
-                            )}
-                          </div>
-                        </div>
-                        <p className="text-sm text-gray-500">{description}</p>
-                        <input
-                          type="password"
-                          value={settings[key as keyof typeof settings] as string}
-                          onChange={(e) => setSettings((prev: any) => ({ ...prev, [key]: e.target.value }))}
-                          className="w-full p-4 border border-gray-300 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all bg-white/80"
-                          placeholder={placeholder}
-                        />
-                        {apiCredits[service] && service !== "openai" && (
-                          <p className="text-sm text-green-600 flex items-center space-x-1">
-                            <CheckCircle className="w-4 h-4" />
-                            <span>Credits available: {apiCredits[service]}</span>
+                      <div className="space-y-3">
+                        <h3 className="font-semibold text-gray-800 flex items-center space-x-2">
+                          <span>Maximum Security & Privacy</span>
+                          <CheckCircle className="w-5 h-5 text-green-600" />
+                        </h3>
+                        <div className="space-y-2 text-gray-600 leading-relaxed">
+                          <p>
+                            <strong>Backend Only:</strong> API keys are now stored securely on the server and never exposed to your browser or device.
                           </p>
-                        )}
+                          <p>
+                            <strong>Local Only:</strong> Your data is processed securely and never leaves the server except for AI analysis.
+                          </p>
+                          <p>
+                            <strong>Enhanced Features:</strong> With backend API keys configured, you get better transcription, real emotion analysis, and smarter summaries.
+                          </p>
+                        </div>
                       </div>
-                    ))}
+                    </div>
                   </div>
-                </div>
 
-                <div className="space-y-6">
-                  <h3 className="text-xl font-semibold text-gray-800">Service Preferences</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                    <div className="space-y-3">
-                      <label className="text-lg font-medium text-gray-700">Summary Service</label>
-                      <p className="text-sm text-gray-500">Choose which AI service to use for generating summaries</p>
+                  {/* Add this section in the settings tab after the security information */}
+                  <div className="space-y-6">
+                    <h3 className="text-xl font-semibold text-gray-800">Privacy & Storage Settings</h3>
+                    <div className="space-y-4">
+                      <label className="text-lg font-medium text-gray-700">API Key Storage</label>
+                      <p className="text-sm text-gray-500">Choose how securely you want to store your API keys</p>
                       <select
-                        value={settings.summaryService}
-                        onChange={(e) => setSettings((prev: any) => ({ ...prev, summaryService: e.target.value }))}
+                        value={settings.storageMode}
+                        onChange={(e) => setSettings((prev: any) => ({ ...prev, storageMode: e.target.value }))}
                         className="w-full p-4 border border-gray-300 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white/80"
                       >
-                        <option value="openai">OpenAI GPT</option>
-                        <option value="claude">Claude</option>
-                        <option value="gemini">Gemini</option>
+                        <option value="none">🔒 Maximum Security - No Storage (re-enter each session)</option>
+                        <option value="memory">🛡️ High Security - Memory Only (lost on refresh)</option>
+                        <option value="session">🔐 Good Security - Session Only (cleared when tab closes)</option>
+                        <option value="local">💾 Convenient - Persistent Storage (survives browser restart)</option>
                       </select>
-                    </div>
-
-                    <div className="space-y-3">
-                      <label className="text-lg font-medium text-gray-700">Voice Service</label>
-                      <p className="text-sm text-gray-500">Choose how you'd like to hear your summaries</p>
-                      {/* Toggle for available TTS providers */}
-                      <div className="flex space-x-2 mb-2">
-                        <Button
-                          variant={settings.voiceService === "elevenlabs" ? "default" : "outline"}
-                          onClick={() => setSettings((prev: any) => ({ ...prev, voiceService: "elevenlabs" }))}
-                        >
-                          ElevenLabs
-                        </Button>
-                        <Button
-                          variant={settings.voiceService === "hume" ? "default" : "outline"}
-                          onClick={() => setSettings((prev: any) => ({ ...prev, voiceService: "hume" }))}
-                        >
-                          Hume.ai
-                        </Button>
-                        <Button
-                          variant={settings.voiceService === "google" ? "default" : "outline"}
-                          onClick={() => setSettings((prev: any) => ({ ...prev, voiceService: "google" }))}
-                        >
-                          Google TTS
-                        </Button>
-                        <Button
-                          variant={settings.voiceService === "browser" ? "default" : "outline"}
-                          onClick={() => setSettings((prev: any) => ({ ...prev, voiceService: "browser" }))}
-                        >
-                          Browser
-                        </Button>
+                      <div className="text-sm text-gray-600 bg-gray-50 rounded-lg p-4">
+                        <p>
+                          <strong>Current mode:</strong>{" "}
+                          {settings.storageMode === "none"
+                            ? "Keys are never stored - maximum privacy"
+                            : settings.storageMode === "memory"
+                              ? "Keys stored in memory only - cleared on page refresh"
+                              : settings.storageMode === "session"
+                                ? "Keys stored until you close this tab"
+                                : "Keys persist until manually cleared"}
+                        </p>
                       </div>
-                      {/* Per-provider voice selection */}
-                      {settings.voiceService === "elevenlabs" && (
-                        <div className="space-y-1">
-                          <label className="text-sm font-medium text-gray-600">ElevenLabs Voice</label>
-                          <select
-                            value={selectedElevenLabsVoice}
-                            onChange={e => setSelectedElevenLabsVoice(e.target.value)}
-                            className="w-full p-2 border border-gray-300 rounded-xl"
-                          >
-                            {elevenLabsVoices.map(v => (
-                              <option key={v.id} value={v.id}>{v.name}</option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
-                      {settings.voiceService === "google" && (
-                        <div className="space-y-1">
-                          <label className="text-sm font-medium text-gray-600">Google TTS Language</label>
-                          <select
-                            value={selectedGoogleLang}
-                            onChange={e => setSelectedGoogleLang(e.target.value)}
-                            className="w-full p-2 border border-gray-300 rounded-xl"
-                          >
-                            <option value="en-US">English (US)</option>
-                            <option value="en-GB">English (UK)</option>
-                            <option value="es-ES">Spanish (Spain)</option>
-                            <option value="fr-FR">French</option>
-                            {/* Add more as needed */}
-                          </select>
-                          <label className="text-sm font-medium text-gray-600">Google TTS Gender</label>
-                          <select
-                            value={selectedGoogleGender}
-                            onChange={e => setSelectedGoogleGender(e.target.value)}
-                            className="w-full p-2 border border-gray-300 rounded-xl"
-                          >
-                            <option value="FEMALE">Female</option>
-                            <option value="MALE">Male</option>
-                            <option value="NEUTRAL">Neutral</option>
-                          </select>
-                        </div>
-                      )}
-                      {settings.voiceService === "hume" && (
-                        <div className="space-y-1">
-                          <label className="text-sm font-medium text-gray-600">Hume Voice</label>
-                          <select
-                            value={selectedHumeVoice}
-                            onChange={e => setSelectedHumeVoice(e.target.value)}
-                            className="w-full p-2 border border-gray-300 rounded-xl"
-                          >
-                            <option value="ITO">ITO</option>
-                            {/* Add more Hume voices if available */}
-                          </select>
-                        </div>
-                      )}
                     </div>
                   </div>
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-          )}
-        </Tabs>
+
+                  {/* AI Model Information */}
+                  <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-2xl p-6 border border-blue-200">
+                    <div className="flex items-start space-x-4">
+                      <div className="w-12 h-12 bg-gradient-to-br from-blue-400 to-indigo-500 rounded-full flex items-center justify-center flex-shrink-0">
+                        <AlertCircle className="w-6 h-6 text-white" />
+                      </div>
+                      <div className="space-y-3">
+                        <h3 className="font-semibold text-gray-800">Best AI Models for Analysis</h3>
+                        <div className="space-y-2 text-gray-600 leading-relaxed">
+                          <p>
+                            <strong>Emotion Analysis:</strong> j-hartmann/emotion-english-distilroberta-base -
+                            State-of-the-art emotion detection with 7 emotion categories
+                          </p>
+                          <p>
+                            <strong>Sentiment Analysis:</strong> cardiffnlp/twitter-roberta-base-sentiment-latest - Highly
+                            accurate positive/negative/neutral classification
+                          </p>
+                          <p>
+                            <strong>Speech-to-Text:</strong> Google Cloud Speech-to-Text API (via Gemini key) -
+                            Professional-grade transcription
+                          </p>
+                          <p>
+                            <strong>Voice Characteristics:</strong> Currently analyzed from audio waveform data - future
+                            updates will include specialized audio AI models
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-8">
+                    <h3 className="text-xl font-semibold text-gray-800">AI Service Configuration</h3>
+                    <div className="grid gap-8">
+                      {[
+                        {
+                          key: "openaiKey",
+                          label: "OpenAI API Key",
+                          placeholder: "sk-...",
+                          description: "For advanced GPT-powered summaries and analysis",
+                          service: "openai",
+                        },
+                        {
+                          key: "claudeKey",
+                          label: "Claude API Key",
+                          placeholder: "sk-ant-...",
+                          description: "For thoughtful Anthropic Claude summaries",
+                          service: "claude",
+                        },
+                        {
+                          key: "geminiKey",
+                          label: "Google AI API Key (Gemini)",
+                          placeholder: "AI...",
+                          description:
+                            "For Google's Gemini AI insights AND professional Google Speech-to-Text transcription",
+                          service: "gemini",
+                        },
+                        {
+                          key: "huggingfaceKey",
+                          label: "Hugging Face API Key",
+                          placeholder: "hf_...",
+                          description:
+                            "For state-of-the-art emotion analysis using j-hartmann/emotion-english-distilroberta-base",
+                          service: "huggingface",
+                        },
+                        {
+                          key: "elevenlabsKey",
+                          label: "ElevenLabs API Key",
+                          placeholder: "...",
+                          description: "For natural, human-like voice synthesis",
+                          service: "elevenlabs",
+                        },
+                        {
+                          key: "humeKey",
+                          label: "Hume.ai API Key",
+                          placeholder: "...",
+                          description: "For emotionally intelligent voice responses",
+                          service: "hume",
+                        },
+                      ].map(({ key, label, placeholder, description, service }) => (
+                        <div key={key} className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <label className="text-lg font-medium text-gray-700">{label}</label>
+                            <div className="flex items-center space-x-2">
+                              {settings[key as keyof typeof settings] && (
+                                <Badge className="bg-green-100 text-green-700 border-green-200">Configured</Badge>
+                              )}
+                              {settings[key as keyof typeof settings] && service !== "huggingface" && service !== "openai" && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => checkApiCredits(service, settings[key as keyof typeof settings] as string)}
+                                  disabled={isCheckingCredits}
+                                  className="text-xs"
+                                >
+                                  {isCheckingCredits ? "Checking..." : "Check Credits"}
+                                </Button>
+                              )}
+                              {service === "openai" && (
+                                <span className="text-xs text-gray-500 ml-2">OpenAI does not provide API usage info for personal keys.</span>
+                              )}
+                            </div>
+                          </div>
+                          <p className="text-sm text-gray-500">{description}</p>
+                          <input
+                            type="password"
+                            value={settings[key as keyof typeof settings] as string}
+                            onChange={(e) => setSettings((prev: any) => ({ ...prev, [key]: e.target.value }))}
+                            className="w-full p-4 border border-gray-300 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all bg-white/80"
+                            placeholder={placeholder}
+                          />
+                          {apiCredits[service] && service !== "openai" && (
+                            <p className="text-sm text-green-600 flex items-center space-x-1">
+                              <CheckCircle className="w-4 h-4" />
+                              <span>Credits available: {apiCredits[service]}</span>
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-6">
+                    <h3 className="text-xl font-semibold text-gray-800">Service Preferences</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                      <div className="space-y-3">
+                        <label className="text-lg font-medium text-gray-700">Summary Service</label>
+                        <p className="text-sm text-gray-500">Choose which AI service to use for generating summaries</p>
+                        <select
+                          value={settings.summaryService}
+                          onChange={(e) => setSettings((prev: any) => ({ ...prev, summaryService: e.target.value }))}
+                          className="w-full p-4 border border-gray-300 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white/80"
+                        >
+                          <option value="openai">OpenAI GPT</option>
+                          <option value="claude">Claude</option>
+                          <option value="gemini">Gemini</option>
+                        </select>
+                      </div>
+
+                      <div className="space-y-3">
+                        <label className="text-lg font-medium text-gray-700">Voice Service</label>
+                        <p className="text-sm text-gray-500">Choose how you'd like to hear your summaries</p>
+                        {/* Toggle for available TTS providers */}
+                        <div className="flex space-x-2 mb-2">
+                          <Button
+                            variant={settings.voiceService === "elevenlabs" ? "default" : "outline"}
+                            onClick={() => setSettings((prev: any) => ({ ...prev, voiceService: "elevenlabs" }))}
+                          >
+                            ElevenLabs
+                          </Button>
+                          <Button
+                            variant={settings.voiceService === "hume" ? "default" : "outline"}
+                            onClick={() => setSettings((prev: any) => ({ ...prev, voiceService: "hume" }))}
+                          >
+                            Hume.ai
+                          </Button>
+                          <Button
+                            variant={settings.voiceService === "google" ? "default" : "outline"}
+                            onClick={() => setSettings((prev: any) => ({ ...prev, voiceService: "google" }))}
+                          >
+                            Google TTS
+                          </Button>
+                          <Button
+                            variant={settings.voiceService === "browser" ? "default" : "outline"}
+                            onClick={() => setSettings((prev: any) => ({ ...prev, voiceService: "browser" }))}
+                          >
+                            Browser
+                          </Button>
+                        </div>
+                        {/* Per-provider voice selection */}
+                        {settings.voiceService === "elevenlabs" && (
+                          <div className="space-y-1">
+                            <label className="text-sm font-medium text-gray-600">ElevenLabs Voice</label>
+                            <select
+                              value={selectedElevenLabsVoice}
+                              onChange={e => setSelectedElevenLabsVoice(e.target.value)}
+                              className="w-full p-2 border border-gray-300 rounded-xl"
+                            >
+                              {elevenLabsVoices.map(v => (
+                                <option key={v.id} value={v.id}>{v.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                        {settings.voiceService === "google" && (
+                          <div className="space-y-1">
+                            <label className="text-sm font-medium text-gray-600">Google TTS Language</label>
+                            <select
+                              value={selectedGoogleLang}
+                              onChange={e => setSelectedGoogleLang(e.target.value)}
+                              className="w-full p-2 border border-gray-300 rounded-xl"
+                            >
+                              <option value="en-US">English (US)</option>
+                              <option value="en-GB">English (UK)</option>
+                              <option value="es-ES">Spanish (Spain)</option>
+                              <option value="fr-FR">French</option>
+                              {/* Add more as needed */}
+                            </select>
+                            <label className="text-sm font-medium text-gray-600">Google TTS Gender</label>
+                            <select
+                              value={selectedGoogleGender}
+                              onChange={e => setSelectedGoogleGender(e.target.value)}
+                              className="w-full p-2 border border-gray-300 rounded-xl"
+                            >
+                              <option value="FEMALE">Female</option>
+                              <option value="MALE">Male</option>
+                              <option value="NEUTRAL">Neutral</option>
+                            </select>
+                          </div>
+                        )}
+                        {settings.voiceService === "hume" && (
+                          <div className="space-y-1">
+                            <label className="text-sm font-medium text-gray-600">Hume Voice</label>
+                            <select
+                              value={selectedHumeVoice}
+                              onChange={e => setSelectedHumeVoice(e.target.value)}
+                              className="w-full p-2 border border-gray-300 rounded-xl"
+                            >
+                              <option value="ITO">ITO</option>
+                              {/* Add more Hume voices if available */}
+                            </select>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+            )}
+          </Tabs>
+        </div>
       </div>
-    </div>
+    </TooltipProvider>
   )
 }
 

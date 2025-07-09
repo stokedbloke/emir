@@ -6,8 +6,10 @@ export async function POST(request: Request) {
       return Response.json({ error: "Text is required" }, { status: 400 })
     }
 
-    const elevenlabsApiKey = process.env.ELEVENLABS_API_KEY
+    const elevenlabsApiKey = process.env.ELEVENLABS_API_KEY;
+    console.log("ELEVENLABS_API_KEY present:", !!elevenlabsApiKey);
     if (!elevenlabsApiKey) {
+      console.error("ElevenLabs API key missing!");
       return Response.json({ error: "ElevenLabs API key not configured" }, { status: 500 })
     }
 
@@ -39,8 +41,12 @@ export async function POST(request: Request) {
         "Content-Type": "audio/mpeg",
       },
     })
-  } catch (error) {
-    console.error("ElevenLabs TTS error:", error)
-    return Response.json({ error: "Failed to generate speech" }, { status: 500 })
+  } catch (err) {
+    console.warn("Falling back to browser TTS: ElevenLabs TTS error:", err);
+    toast({
+      title: "ElevenLabs TTS failed",
+      description: "Falling back to browser voice. Check your ElevenLabs API key and quota.",
+      variant: "destructive",
+    });
   }
 }

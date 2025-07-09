@@ -6,6 +6,7 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google"
 export async function POST(request: Request) {
   try {
     const { transcript, service = "openai" } = await request.json()
+    console.log("Summarize service requested:", service);
 
     if (!transcript) {
       return Response.json({ error: "Transcript is required" }, { status: 400 })
