@@ -1,7 +1,14 @@
+// API Route: Analyze vocal characteristics from audio
+// Receives a POST request with audio (as FormData) and optional apiKey.
+// No environment variables required for DSP analysis (may use apiKey for external services in the future).
+//
+// Returns: { dsp: ..., speechbrain: ... } with vocal analysis results, or fallback values on error.
+//
 import { Buffer } from 'buffer';
 
 export async function POST(request: Request) {
   try {
+    // Parse audio file and optional apiKey from form data
     const formData = await request.formData()
     const audioFile = formData.get("audio") as File
     const apiKey = formData.get("apiKey") as string
@@ -10,7 +17,7 @@ export async function POST(request: Request) {
       return Response.json({ error: "Audio file is required" }, { status: 400 })
     }
 
-    // Always run DSP analysis first
+    // Always run DSP analysis first (extracts features from audio)
     let dspResult = {
       energy: "Unknown",
       tone: "Unknown",
@@ -33,11 +40,12 @@ export async function POST(request: Request) {
     };
     let audioBuffer, audioContext, decodedAudio, channelData;
     try {
+      // Decode audio and extract channel data
       audioBuffer = await audioFile.arrayBuffer();
       audioContext = new (globalThis.AudioContext || (globalThis as any).webkitAudioContext)();
       decodedAudio = await audioContext.decodeAudioData(audioBuffer);
       channelData = decodedAudio.getChannelData(0);
-      // DSP calculations
+      // DSP calculations (RMS, zero-crossings, speech segments, etc.)
       let rms = 0;
       let zeroCrossings = 0;
       for (let i = 0; i < channelData.length; i++) {

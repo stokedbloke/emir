@@ -50,3 +50,34 @@ Continue building your app on:
 - [ ] Data corruption in DB: app does not crash, handles missing/invalid fields.
 
 **Note:** Some cases (user ID across browsers/devices, storage clearing, etc.) require testing in a deployed (production) environment, not just locally.
+
+## Environment Variables
+
+Below are all environment variables required for this project, with their purpose and visibility:
+
+| Variable Name                  | Public/Private | Purpose                                                      |
+|------------------------------- |:-------------:|--------------------------------------------------------------|
+| NEXT_PUBLIC_SUPABASE_URL       | Public        | Supabase project URL for browser (frontend)                  |
+| NEXT_PUBLIC_SUPABASE_ANON_KEY  | Public        | Supabase anon key for browser (frontend)                     |
+| SUPABASE_URL                   | Private       | Supabase project URL for server/API routes                   |
+| SUPABASE_SERVICE_ROLE_KEY      | Private       | Supabase service role key for server/API routes              |
+| OPENAI_API_KEY                 | Private       | OpenAI API key for LLM summarization (server-side only)      |
+| ANTHROPIC_API_KEY              | Private       | Anthropic Claude API key for LLM summarization (optional)    |
+| GOOGLE_API_KEY                 | Private       | Google API key for Gemini, Speech-to-Text, TTS (server-side) |
+| HUGGINGFACE_API_KEY            | Private       | HuggingFace API key for emotion analysis (server-side)       |
+| ELEVENLABS_API_KEY             | Private       | ElevenLabs API key for TTS (server-side)                     |
+| HUME_API_KEY                   | Private       | Hume.ai API key for TTS (server-side, optional)              |
+| NEXT_PUBLIC_ADMIN_SECRET       | Public        | Optional: Admin secret for browser admin features            |
+
+**Public variables** (those prefixed with `NEXT_PUBLIC_`) are exposed to the browser and must not contain sensitive information. All other variables are private and only available to server-side code (API routes, server functions).
+
+**Note:** Vercel and Next.js automatically determine public/private status based on the variable name prefix. No extra configuration is needed—just use the correct naming convention.
+
+## Git Merge Summary (for PR/commit)
+
+**Title:** Milestone 2 QA: Anonymous User Tracking & Reflection History
+
+**Description:**
+- Implements and documents Milestone 2: anonymous user tracking, Supabase reflection storage, and history UI.
+- Adds a comprehensive QA checklist for use and edge cases, including those requiring production testing (e.g., user ID persistence across browsers/devices).
+- Prepares the codebase for settings page hardening and LLM fallback in future milestones.

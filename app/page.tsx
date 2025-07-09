@@ -4,9 +4,9 @@
 // @ts-ignore
 declare var process: {
   env: {
-    NEXT_PUBLIC_SUPABASE_URL: string;
-    NEXT_PUBLIC_SUPABASE_ANON_KEY: string;
-    NEXT_PUBLIC_ADMIN_SECRET?: string;
+    NEXT_PUBLIC_SUPABASE_URL: string; // Public: Supabase project URL for browser
+    NEXT_PUBLIC_SUPABASE_ANON_KEY: string; // Public: Supabase anon key for browser
+    NEXT_PUBLIC_ADMIN_SECRET?: string; // Public: Optional admin secret for browser admin features
   };
 };
 
@@ -64,11 +64,8 @@ interface SessionData {
   audioBlob?: Blob
 }
 
-// Move Supabase client creation to the top-level (outside the component)
-// Make sure to set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in your .env.local and Vercel dashboard
-// console.log('SUPABASE_URL:', process.env.NEXT_PUBLIC_SUPABASE_URL);
-// console.log('SUPABASE_ANON_KEY:', process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
-
+// Initialize Supabase client for browser use. These values are public and safe to expose.
+// Make sure to set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in your .env and Vercel dashboard.
 const supabase = createSupabaseClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -136,6 +133,8 @@ export default function TalkToMyself() {
   const [selectedHumeVoice, setSelectedHumeVoice] = useState<string>("ITO");
 
   useEffect(() => {
+    // Assign or retrieve a unique anonymous user ID for this browser/device.
+    // This ID is stored in localStorage and used to associate reflections with the user in Supabase.
     let id = localStorage.getItem('ttm-user-id');
     if (!id) {
       id = uuidv4();
@@ -170,11 +169,12 @@ export default function TalkToMyself() {
 
   // Check if user is admin (for development/testing)
   useEffect(() => {
+    // Check if the user is an admin by comparing the URL or sessionStorage secret to the public admin secret.
+    // This is only for development/testing and does not provide real security.
     if (typeof window !== "undefined") {
       const urlParams = new URLSearchParams(window.location.search)
       const adminSecret = urlParams.get("admin")
       const storedAdminSecret = sessionStorage.getItem("admin-secret")
-      
       if (adminSecret === process.env.NEXT_PUBLIC_ADMIN_SECRET || storedAdminSecret === process.env.NEXT_PUBLIC_ADMIN_SECRET) {
         setIsAdmin(true)
         sessionStorage.setItem("admin-secret", adminSecret || storedAdminSecret || "")

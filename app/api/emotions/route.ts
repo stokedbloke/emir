@@ -1,5 +1,13 @@
+// API Route: Analyze emotions in user text using HuggingFace or fallback logic
+// Receives a POST request with { text } and returns an array of detected emotions.
+// Environment variables used (private, server-side only):
+//   HUGGINGFACE_API_KEY
+//
+// Returns: { emotions: Array<{ emotion: string, confidence: number }> } on success, or { error: ... } on failure.
+//
 export async function POST(request: Request) {
   try {
+    // Parse text from request body
     const { text } = await request.json()
 
     if (!text) {
@@ -10,7 +18,7 @@ export async function POST(request: Request) {
     const huggingfaceApiKey = process.env.HUGGINGFACE_API_KEY
     if (huggingfaceApiKey) {
       try {
-        // First try the 27-emotion model (much better than 7-emotion)
+        // Use HuggingFace 27-emotion model
         const response = await fetch("https://api-inference.huggingface.co/models/SamLowe/roberta-base-go_emotions", {
           headers: {
             Authorization: `Bearer ${huggingfaceApiKey}`,
@@ -22,8 +30,6 @@ export async function POST(request: Request) {
 
         if (response.ok) {
           const emotions = await response.json()
-          console.log("HuggingFace emotions response:", emotions)
-
           // Handle the response format - it might be nested
           let emotionData = emotions
           if (Array.isArray(emotions) && emotions[0]) {
@@ -31,26 +37,27 @@ export async function POST(request: Request) {
           }
 
           if (Array.isArray(emotionData)) {
+            // Format and sort top 6 emotions
             const formattedEmotions = emotionData
               .map((emotion: any) => ({
                 emotion: emotion.label.charAt(0).toUpperCase() + emotion.label.slice(1).toLowerCase(),
                 confidence: emotion.score,
               }))
               .sort((a: any, b: any) => b.confidence - a.confidence)
-              .slice(0, 6) // Show top 6 emotions
-
-            console.log("Formatted emotions:", formattedEmotions)
+              .slice(0, 6)
             return Response.json({ emotions: formattedEmotions })
           }
         } else {
+          // Log HuggingFace API error
           console.log("HuggingFace API response not ok:", response.status, await response.text())
         }
       } catch (error) {
+        // Log HuggingFace fetch error
         console.error("Hugging Face API error:", error)
       }
     }
 
-    // Enhanced fallback: Deep content analysis of the actual transcript
+    // Fallback: Analyze text content for basic emotions
     const text_lower = text.toLowerCase()
     const emotions = []
 

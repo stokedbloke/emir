@@ -1,12 +1,19 @@
+// API Route: Analyze sentiment in user text using HuggingFace or fallback logic
+// Receives a POST request with { text, apiKey } and returns sentiment label and score.
+// Environment variables: None required, but apiKey can be provided in request body for HuggingFace.
+//
+// Returns: { sentiment: Array<{ label: string, score: number }> } on success, or { error: ... } on failure.
+//
 export async function POST(request: Request) {
   try {
+    // Parse text and optional apiKey from request body
     const { text, apiKey } = await request.json()
 
     if (!text) {
       return Response.json({ error: "Text is required" }, { status: 400 })
     }
 
-    // Try Hugging Face sentiment analysis
+    // Try Hugging Face sentiment analysis if apiKey is provided
     if (apiKey) {
       try {
         const response = await fetch(
@@ -26,11 +33,12 @@ export async function POST(request: Request) {
           return Response.json({ sentiment: sentiment[0] })
         }
       } catch (error) {
+        // Log HuggingFace sentiment error
         console.error("Hugging Face sentiment error:", error)
       }
     }
 
-    // Fallback sentiment analysis
+    // Fallback: Simple keyword-based sentiment analysis
     const text_lower = text.toLowerCase()
     let sentiment = "NEUTRAL"
     let confidence = 0.5
