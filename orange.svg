@@ -1,0 +1,13 @@
+<!-- orange.svg -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <rect x="0" y="49" width="100" height="2" fill="#000" opacity="0.15"/>
+  <path
+    d="M20,20 h50 a10,10 0 0 1 10,10 v30 l-15,-10 h-45 a10,10 0 0 1 -10,-10 v-20 a10,10 0 0 1 10,-10 z"
+    fill="#FFA500"
+  />
+  <path
+    d="M20,80 h50 a10,10 0 0 0 10,-10 v-30 l-15,10 h-45 a10,10 0 0 0 -10,10 v20 a10,10 0 0 0 10,10 z"
+    fill="#FFA500"
+    opacity="0.3"
+  />
+</svg>
