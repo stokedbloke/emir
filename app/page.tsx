@@ -1825,11 +1825,52 @@ export default function TalkToMyself() {
                   {/* Service Preferences Section */}
                   <div className="space-y-6">
                     <h3 className="text-xl font-semibold text-gray-800">Service Preferences</h3>
-                    {/* Existing controls for summary/voice provider order, etc. */}
-                    {/* ... (keep these controls) ... */}
-                      </div>
+                    <div className="flex flex-col gap-4">
+                      <label className="font-medium text-gray-700">Summary Service</label>
+                      <select
+                        className="w-full max-w-xs p-2 border rounded"
+                        value={settings.summaryService}
+                        onChange={e => setSettings((s: typeof settings) => ({ ...s, summaryService: e.target.value }))}
+                      >
+                        <option value="openai">OpenAI</option>
+                        <option value="gemini">Google Gemini</option>
+                        <option value="claude">Anthropic Claude</option>
+                      </select>
+                      <div className="text-sm text-gray-500">Current: {settings.summaryService}</div>
+                    </div>
+                    {/* Existing controls for voice provider, etc. can go here */}
+                  </div>
                   {/* Debug/Log Section (optional) */}
                   {/* ... (add debug/log UI if desired) ... */}
+                  {/* In the Admin Settings tab, under Service Preferences, add a TTS service selector: */}
+                  <div className="flex flex-col gap-4 mt-6">
+                    <label className="font-medium text-gray-700">TTS (Voice) Service</label>
+                    <select
+                      className="w-full max-w-xs p-2 border rounded"
+                      value={settings.voiceService}
+                      onChange={e => setSettings((s: typeof settings) => ({ ...s, voiceService: e.target.value }))}
+                    >
+                      <option value="browser">Browser (System Voice)</option>
+                      <option value="elevenlabs">ElevenLabs</option>
+                      <option value="google">Google TTS</option>
+                      <option value="hume">Hume.ai</option>
+                    </select>
+                    <div className="text-sm text-gray-500">Current: {settings.voiceService}</div>
+                  </div>
+                  {settings.voiceService === "elevenlabs" && (
+                    <div className="flex flex-col gap-2 mt-2">
+                      <label className="font-medium text-gray-800">ElevenLabs Voice</label>
+                      <select
+                        className="w-full max-w-xs p-2 border rounded text-gray-900"
+                        value={selectedElevenLabsVoice}
+                        onChange={e => setSelectedElevenLabsVoice(e.target.value)}
+                      >
+                        {elevenLabsVoices.map(v => (
+                          <option key={v.id} value={v.id}>{v.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </TabsContent>
