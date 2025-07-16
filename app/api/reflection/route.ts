@@ -18,12 +18,26 @@ const supabase = createClient(
 export async function POST(request: Request) {
   try {
     // Parse the incoming JSON body
-    const { userId, transcript, summary, emotions, vocal } = await request.json();
+    const body = await request.json();
+    const { userId, transcript, summary, emotions, vocal } = body;
+
+    // If only userId is provided, fetch reflection history
+    if (userId && !transcript && !summary && !emotions && !vocal) {
+      const { data, error } = await supabase
+        .from('reflections')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
+      if (error) {
+        return Response.json({ error: error.message }, { status: 500 });
+      }
+      return Response.json({ reflections: data || [] });
+    }
 
     // Upsert user (create if not exists, update last_active if exists)
     await supabase.from('users').upsert([
       { id: userId, last_active: new Date() }
-    ], { onConflict: ['id'] });
+    ], { onConflict: 'id' });
 
     // Insert reflection for this user
     const { error } = await supabase.from('reflections').insert([

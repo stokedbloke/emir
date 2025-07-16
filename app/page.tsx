@@ -1036,32 +1036,42 @@ export default function TalkToMyself() {
     }
   }, [])
 
-  // Fetch reflections from Supabase for the current user
+  // Fetch reflections from API route for the current user
   const fetchReflections = async (userId: string) => {
     if (!userId) return [];
-    const { data, error } = await supabase
-      .from('reflections')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false });
-    if (error) {
+    try {
+      const res = await fetch('/api/reflection', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      });
+      if (!res.ok) {
+        toast({
+          title: 'Failed to fetch reflection history',
+          description: 'There was a problem fetching your reflection history. Please try again.',
+          variant: 'destructive',
+        });
+        return [];
+      }
+      const data = await res.json();
+      // Map DB rows to SessionData shape
+      return (data.reflections || []).map((row: any) => ({
+        id: row.id,
+        timestamp: new Date(row.created_at),
+        transcript: row.transcript,
+        summary: row.summary,
+        emotions: row.emotions || [],
+        vocalCharacteristics: row.vocal || {},
+        audioBlob: undefined, // Not stored in DB
+      }));
+    } catch (err) {
       toast({
         title: 'Failed to fetch reflection history',
-        description: error.message,
+        description: 'There was a problem fetching your reflection history. Please try again.',
         variant: 'destructive',
       });
       return [];
     }
-    // Map DB rows to SessionData shape
-    return (data || []).map((row: any) => ({
-      id: row.id,
-      timestamp: new Date(row.created_at),
-      transcript: row.transcript,
-      summary: row.summary,
-      emotions: row.emotions || [],
-      vocalCharacteristics: row.vocal || {},
-      audioBlob: undefined, // Not stored in DB
-    }));
   };
 
   // Fetch on mount and when userId changes
