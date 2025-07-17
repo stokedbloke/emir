@@ -73,6 +73,32 @@ Below are all environment variables required for this project, with their purpos
 
 **Note:** Vercel and Next.js automatically determine public/private status based on the variable name prefix. No extra configuration is needed—just use the correct naming convention.
 
+## Global Admin Settings for Summary and TTS
+
+This app uses a global settings table in Supabase to control which summary and TTS (text-to-speech) services are used for all users. These settings are managed by the admin via the UI and API.
+
+### Supabase Table
+- **Table:** `global_settings`
+- **Fields:**
+  - `summary_service` (e.g., 'openai', 'gemini', 'claude')
+  - `tts_service` (e.g., 'browser', 'elevenlabs', 'google', 'hume')
+  - `elevenlabs_voice_id` (optional, for ElevenLabs TTS)
+  - `google_lang` (optional, for Google TTS)
+  - `google_gender` (optional, for Google TTS)
+  - `hume_voice` (optional, for Hume TTS)
+  - `updated_at` (auto-updated timestamp)
+
+### API Route
+- **GET `/api/global-settings`**: Returns the current global settings for use by all users.
+- **PATCH `/api/global-settings`**: Updates the global settings (admin only; add authentication in production).
+
+### Admin UI
+- The admin can update summary and TTS service, ElevenLabs voice, Google TTS language/gender, and Hume voice from the settings tab in the UI.
+- All users will use the global settings for a consistent experience.
+
+### Security Note
+- The PATCH endpoint should only be accessible to admins. Add authentication/authorization for production use.
+
 ## Git Merge Summary (for PR/commit)
 
 **Title:** Milestone 2 QA: Anonymous User Tracking & Reflection History

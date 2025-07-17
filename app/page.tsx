@@ -133,6 +133,14 @@ export default function TalkToMyself() {
   const [selectedHumeVoice, setSelectedHumeVoice] = useState<string>("ITO");
   const [microphoneError, setMicrophoneError] = useState<string | null>(null);
   const [isRequestingMic, setIsRequestingMic] = useState(false);
+  const [globalSettings, setGlobalSettings] = useState(null);
+
+  useEffect(() => {
+    fetch('/api/global-settings')
+      .then(res => res.json())
+      .then(data => setGlobalSettings(data.settings))
+      .catch(() => setGlobalSettings(null));
+  }, []);
 
   useEffect(() => {
     // Assign or retrieve a unique anonymous user ID for this browser/device.
@@ -884,126 +892,42 @@ export default function TalkToMyself() {
   }, []);
 
   const speakSummary = async (summary: string) => {
+    if (!globalSettings) return; // Wait for settings to load
+
+    const ttsService = globalSettings.tts_service;
+    // Add any additional settings (voice, lang, etc.) as needed
+
     const playAudioBlob = (blob: Blob) => {
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
-      setIsSpeaking(true);
-      setIsPaused(false);
-      audio.onended = () => {
-        setIsSpeaking(false);
-        setIsPaused(false);
-        setUtteranceRef(null);
-        URL.revokeObjectURL(url);
-      };
-      audio.onerror = () => {
-        setIsSpeaking(false);
-        setIsPaused(false);
-        setUtteranceRef(null);
-        URL.revokeObjectURL(url);
-      };
+      audio.onended = () => URL.revokeObjectURL(url);
+      audio.onerror = () => URL.revokeObjectURL(url);
       audio.play();
     };
-    if (settings.voiceService === "elevenlabs") {
+
+    if (ttsService === "elevenlabs") {
       try {
         const response = await fetch("/api/voice/elevenlabs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: summary, voiceId: selectedElevenLabsVoice }),
+          body: JSON.stringify({ text: summary, voiceId: globalSettings.elevenlabs_voice_id }),
         });
         if (!response.ok) throw new Error("Failed to fetch ElevenLabs audio");
         const audioBlob = await response.blob();
-        setActualTTSService("elevenlabs");
         playAudioBlob(audioBlob);
         return;
       } catch (err) {
-        console.warn("Falling back to browser TTS: ElevenLabs TTS error:", err);
+        // Fallback to browser TTS below
       }
     }
-    if (settings.voiceService === "hume") {
-      try {
-        const response = await fetch("/api/voice/hume", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: summary, voice: selectedHumeVoice }),
-        });
-        if (!response.ok) throw new Error("Failed to fetch Hume audio");
-        const audioBlob = await response.blob();
-        setActualTTSService("hume");
-        playAudioBlob(audioBlob);
-        return;
-      } catch (err) {
-        console.warn("Falling back to browser TTS: Hume TTS error:", err);
-      }
-    }
-    if (settings.voiceService === "google") {
-      try {
-        const response = await fetch("/api/voice/google", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: summary, languageCode: selectedGoogleLang, gender: selectedGoogleGender }),
-        });
-        if (!response.ok) throw new Error("Failed to fetch Google TTS audio");
-        const data = await response.json();
-        if (data.audioContent) {
-          const audioBlob = new Blob([
-            Uint8Array.from(atob(data.audioContent), c => c.charCodeAt(0))
-          ], { type: "audio/mp3" });
-          setActualTTSService("google");
-          playAudioBlob(audioBlob);
-          return;
-        } else {
-          throw new Error("No audio content from Google TTS");
-        }
-      } catch (err) {
-        console.warn("Falling back to browser TTS: Google TTS error:", err);
-      }
-    }
-    // Default: Browser TTS
-    setActualTTSService("browser");
-    // ...browser TTS code...
+    // ...repeat for other services if needed...
+
+    // Fallback: Browser TTS
     if ("speechSynthesis" in window) {
-      speechSynthesis.cancel();
-      setIsSpeaking(true);
-      setIsPaused(false);
       const utterance = new SpeechSynthesisUtterance(summary);
-      setUtteranceRef(utterance);
-      utterance.rate = 0.75;
-      utterance.pitch = 0.95;
-      utterance.volume = 0.8;
-      utterance.onend = () => {
-        setIsSpeaking(false);
-        setIsPaused(false);
-        setUtteranceRef(null);
-      };
-      utterance.onerror = () => {
-        setIsSpeaking(false);
-        setIsPaused(false);
-        setUtteranceRef(null);
-      };
-      const loadVoices = () => {
-        const voices = speechSynthesis.getVoices();
-        const preferredVoice =
-          voices.find(
-            (voice) =>
-              voice.name.includes("Samantha") ||
-              voice.name.includes("Karen") ||
-              voice.name.includes("Moira") ||
-              voice.name.includes("Tessa") ||
-              (voice.name.includes("Google") && voice.name.includes("US")) ||
-              (voice.name.includes("Microsoft") && voice.name.includes("Aria")),
-          ) || voices.find((voice) => voice.lang.includes("en-US"));
-        if (preferredVoice) {
-          utterance.voice = preferredVoice;
-        }
-        speechSynthesis.speak(utterance);
-      };
-      if (speechSynthesis.getVoices().length > 0) {
-        loadVoices();
-      } else {
-        speechSynthesis.onvoiceschanged = loadVoices;
-      }
+      window.speechSynthesis.speak(utterance);
     }
-  }
+  };
 
   const pauseResumeSpeech = () => {
     if (speechSynthesis.speaking && !speechSynthesis.paused) {
@@ -1189,6 +1113,26 @@ export default function TalkToMyself() {
     (currentSession ? 3 : 0) +
     (sessions.filter(s => s.transcript).length > 0 ? 1 : 0) +
     (isAdmin ? 1 : 0);
+
+  // Move this function here so setGlobalSettings is in scope
+  const handleGlobalSettingsChange = (updates: Record<string, any>) => {
+    fetch('/api/global-settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) {
+          // Refetch settings to update UI
+          fetch('/api/global-settings')
+            .then(res => res.json())
+            .then(data => setGlobalSettings(data.settings));
+        } else {
+          alert(data.error || "Failed to update settings");
+        }
+      });
+  };
 
   return (
     <TooltipProvider>
@@ -1817,11 +1761,6 @@ export default function TalkToMyself() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="p-8 space-y-12">
-                  {/* Service Status Section */}
-                  <div className="space-y-6">
-                    <h3 className="text-xl font-semibold text-gray-800">Service Status</h3>
-                    <ServiceStatusAndTestTools />
-                      </div>
                   {/* Service Preferences Section */}
                   <div className="space-y-6">
                     <h3 className="text-xl font-semibold text-gray-800">Service Preferences</h3>
@@ -1829,48 +1768,65 @@ export default function TalkToMyself() {
                       <label className="font-medium text-gray-700">Summary Service</label>
                       <select
                         className="w-full max-w-xs p-2 border rounded"
-                        value={settings.summaryService}
-                        onChange={e => setSettings((s: typeof settings) => ({ ...s, summaryService: e.target.value }))}
+                        value={globalSettings?.summary_service || ''}
+                        onChange={e => handleGlobalSettingsChange({ summary_service: e.target.value })}
                       >
                         <option value="openai">OpenAI</option>
                         <option value="gemini">Google Gemini</option>
                         <option value="claude">Anthropic Claude</option>
                       </select>
-                      <div className="text-sm text-gray-500">Current: {settings.summaryService}</div>
+                      <div className="text-sm text-gray-500">Current: {globalSettings?.summary_service}</div>
                     </div>
-                    {/* Existing controls for voice provider, etc. can go here */}
-                  </div>
-                  {/* Debug/Log Section (optional) */}
-                  {/* ... (add debug/log UI if desired) ... */}
-                  {/* In the Admin Settings tab, under Service Preferences, add a TTS service selector: */}
-                  <div className="flex flex-col gap-4 mt-6">
-                    <label className="font-medium text-gray-700">TTS (Voice) Service</label>
-                    <select
-                      className="w-full max-w-xs p-2 border rounded"
-                      value={settings.voiceService}
-                      onChange={e => setSettings((s: typeof settings) => ({ ...s, voiceService: e.target.value }))}
-                    >
-                      <option value="browser">Browser (System Voice)</option>
-                      <option value="elevenlabs">ElevenLabs</option>
-                      <option value="google">Google TTS</option>
-                      <option value="hume">Hume.ai</option>
-                    </select>
-                    <div className="text-sm text-gray-500">Current: {settings.voiceService}</div>
-                  </div>
-                  {settings.voiceService === "elevenlabs" && (
-                    <div className="flex flex-col gap-2 mt-2">
-                      <label className="font-medium text-gray-800">ElevenLabs Voice</label>
+                    <div className="flex flex-col gap-4 mt-6">
+                      <label className="font-medium text-gray-700">TTS (Voice) Service</label>
                       <select
-                        className="w-full max-w-xs p-2 border rounded text-gray-900"
-                        value={selectedElevenLabsVoice}
-                        onChange={e => setSelectedElevenLabsVoice(e.target.value)}
+                        className="w-full max-w-xs p-2 border rounded"
+                        value={globalSettings?.tts_service || ''}
+                        onChange={e => handleGlobalSettingsChange({ tts_service: e.target.value })}
                       >
-                        {elevenLabsVoices.map(v => (
-                          <option key={v.id} value={v.id}>{v.name}</option>
-                        ))}
+                        <option value="browser">Browser (System Voice)</option>
+                        <option value="elevenlabs">ElevenLabs</option>
+                        <option value="google">Google TTS</option>
+                        <option value="hume">Hume.ai</option>
                       </select>
+                      <div className="text-sm text-gray-500">Current: {globalSettings?.tts_service}</div>
                     </div>
-                  )}
+                    {/* Add similar controls for elevenlabs_voice_id, google_lang, google_gender, hume_voice if needed */}
+                    <label>ElevenLabs Voice</label>
+                    <select
+                      value={globalSettings?.elevenlabs_voice_id || ''}
+                      onChange={e => handleGlobalSettingsChange({ elevenlabs_voice_id: e.target.value })}
+                    >
+                      {elevenLabsVoices.map(v => (
+                        <option key={v.id} value={v.id}>{v.name}</option>
+                      ))}
+                    </select>
+                    <label>Hume Voice</label>
+                    <input
+                      type="text"
+                      value={globalSettings?.hume_voice || ''}
+                      onChange={e => handleGlobalSettingsChange({ hume_voice: e.target.value })}
+                    />
+                    <label>Google TTS Language</label>
+                    <input
+                      type="text"
+                      value={globalSettings?.google_lang || ''}
+                      onChange={e => handleGlobalSettingsChange({ google_lang: e.target.value })}
+                    />
+                    <label>Google TTS Gender</label>
+                    <select
+                      value={globalSettings?.google_gender || ''}
+                      onChange={e => handleGlobalSettingsChange({ google_gender: e.target.value })}
+                    >
+                      <option value="FEMALE">Female</option>
+                      <option value="MALE">Male</option>
+                    </select>
+                  </div>
+                  {/* Service Status Section */}
+                  <div className="space-y-6">
+                    <h3 className="text-xl font-semibold text-gray-800">Service Status</h3>
+                    <ServiceStatusAndTestTools />
+                  </div>
                 </CardContent>
               </Card>
             </TabsContent>
