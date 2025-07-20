@@ -71,6 +71,19 @@ const supabase = createSupabaseClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
+type GlobalSettings = {
+  summary_service: string;
+  tts_service: string;
+  elevenlabs_voice_id?: string;
+  google_lang?: string;
+  google_gender?: string;
+  hume_voice?: string;
+};
+
+// Add browser detection utilities at the top of the component:
+const isSafari = typeof window !== 'undefined' && /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+const isFirefox = typeof window !== 'undefined' && navigator.userAgent.toLowerCase().indexOf('firefox') > -1;
+
 export default function TalkToMyself() {
   // All hooks must be declared here, before any return statement
   const [hasPermission, setHasPermission] = useState<boolean | null>(null)
@@ -82,23 +95,7 @@ export default function TalkToMyself() {
   const [currentSession, setCurrentSession] = useState<SessionData | null>(null)
   const [activeTab, setActiveTab] = useState("record")
   const [isAdmin, setIsAdmin] = useState(false)
-  const [settings, setSettings] = useState(() => {
-    if (typeof window !== "undefined") {
-      const saved = sessionStorage.getItem("emotional-mirror-settings")
-      if (saved) {
-        try {
-          return JSON.parse(saved)
-        } catch (e) {
-          console.error("Failed to parse saved settings:", e)
-        }
-      }
-    }
-    return {
-      summaryService: "openai",
-      voiceService: "browser",
-      storageMode: "session",
-    }
-  })
+  // Removed old local settings - now using global settings only
   const [recordingTime, setRecordingTime] = useState(0)
   const [breathingPhase, setBreathingPhase] = useState<"inhale" | "exhale">("inhale")
   const [apiCredits, setApiCredits] = useState<Record<string, string | null>>({})
@@ -133,14 +130,96 @@ export default function TalkToMyself() {
   const [selectedHumeVoice, setSelectedHumeVoice] = useState<string>("ITO");
   const [microphoneError, setMicrophoneError] = useState<string | null>(null);
   const [isRequestingMic, setIsRequestingMic] = useState(false);
-  const [globalSettings, setGlobalSettings] = useState(null);
+  const [globalSettings, setGlobalSettings] = useState<GlobalSettings | null>(null);
+  const [globalSettingsLoading, setGlobalSettingsLoading] = useState(true);
+  const [globalSettingsError, setGlobalSettingsError] = useState<string | null>(null);
+
+  // Function to collect device and browser information
+  const getDeviceInfo = () => {
+    if (typeof window === 'undefined') return null;
+    
+    return {
+      userAgent: navigator.userAgent,
+      platform: navigator.platform,
+      language: navigator.language,
+      cookieEnabled: navigator.cookieEnabled,
+      onLine: navigator.onLine,
+      screenWidth: screen.width,
+      screenHeight: screen.height,
+      windowWidth: window.innerWidth,
+      windowHeight: window.innerHeight,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      timestamp: new Date().toISOString(),
+    };
+  };
+
+  // Function to get browser-specific info
+  const getBrowserInfo = () => {
+    if (typeof window === 'undefined') return null;
+    
+    const userAgent = navigator.userAgent;
+    let browser = 'Unknown';
+    let version = 'Unknown';
+    
+    if (userAgent.includes('Chrome')) {
+      browser = 'Chrome';
+      version = userAgent.match(/Chrome\/(\d+)/)?.[1] || 'Unknown';
+    } else if (userAgent.includes('Firefox')) {
+      browser = 'Firefox';
+      version = userAgent.match(/Firefox\/(\d+)/)?.[1] || 'Unknown';
+    } else if (userAgent.includes('Safari') && !userAgent.includes('Chrome')) {
+      browser = 'Safari';
+      version = userAgent.match(/Version\/(\d+)/)?.[1] || 'Unknown';
+    } else if (userAgent.includes('Edge')) {
+      browser = 'Edge';
+      version = userAgent.match(/Edge\/(\d+)/)?.[1] || 'Unknown';
+    }
+    
+    return {
+      browser,
+      version,
+      userAgent: userAgent,
+      isMobile: /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(userAgent),
+      isTablet: /iPad|Android(?=.*\bMobile\b)(?=.*\bSafari\b)/i.test(userAgent),
+    };
+  };
 
   useEffect(() => {
+    setGlobalSettingsLoading(true);
+    setGlobalSettingsError(null);
+    
     fetch('/api/global-settings')
-      .then(res => res.json())
-      .then(data => setGlobalSettings(data.settings))
-      .catch(() => setGlobalSettings(null));
+      .then(res => {
+        if (!res.ok) {
+          throw new Error(`Failed to load settings: ${res.status}`);
+        }
+        return res.json();
+      })
+      .then(data => {
+        if (data.error) {
+          throw new Error(data.error);
+        }
+        setGlobalSettings(data.settings as GlobalSettings);
+        // Initialize actualTTSService based on global settings
+        if (data.settings?.tts_service) {
+          setActualTTSService(data.settings.tts_service);
+        }
+        setGlobalSettingsLoading(false);
+      })
+      .catch((error) => {
+        console.error('Failed to load global settings:', error);
+        setGlobalSettingsError(error.message);
+        setGlobalSettingsLoading(false);
+        // Don't set globalSettings to null - keep previous settings if available
+      });
   }, []);
+
+  // Update actualTTSService when globalSettings changes
+  useEffect(() => {
+    if (globalSettings?.tts_service) {
+      setActualTTSService(globalSettings.tts_service);
+    }
+  }, [globalSettings?.tts_service]);
 
   useEffect(() => {
     // Assign or retrieve a unique anonymous user ID for this browser/device.
@@ -160,17 +239,7 @@ export default function TalkToMyself() {
       .catch(() => setServiceStatus({ huggingface: false, google: false }));
   }, []);
 
-  // Save settings based on storage preference
-  useEffect(() => {
-    if (typeof window !== "undefined" && settings.storageMode !== "memory") {
-      if (settings.storageMode === "session") {
-        sessionStorage.setItem("emotional-mirror-settings", JSON.stringify(settings))
-      } else if (settings.storageMode === "local") {
-        localStorage.setItem("emotional-mirror-settings", JSON.stringify(settings))
-      }
-      // "none" mode doesn't save anything
-    }
-  }, [settings])
+  // Removed old settings saving - now using global settings only
 
   // Check microphone permission on mount
   useEffect(() => {
@@ -335,6 +404,15 @@ export default function TalkToMyself() {
   const startRecording = () => {
     if (!streamRef.current || isSpeaking) return
 
+    if (!globalSettings) {
+      toast({
+        title: "Settings not loaded",
+        description: "Please wait for settings to load before recording.",
+        variant: "destructive",
+      });
+      return
+    }
+
     if (speechSynthesis.speaking) {
       speechSynthesis.cancel()
       setIsSpeaking(false)
@@ -345,42 +423,60 @@ export default function TalkToMyself() {
     console.log("Stream tracks:", streamRef.current.getTracks())
     console.log("Audio tracks:", streamRef.current.getAudioTracks())
     
-    mediaRecorderRef.current = new MediaRecorder(streamRef.current, {
-      mimeType: "audio/webm;codecs=opus",
-    })
-
-    mediaRecorderRef.current.ondataavailable = (event) => {
-      console.log("MediaRecorder ondataavailable:", event.data.size, "bytes")
-      if (event.data.size > 0) {
-        audioChunksRef.current.push(event.data)
-        console.log("Added audio chunk, total chunks:", audioChunksRef.current.length)
-      } else {
-        console.warn("Received empty audio chunk")
+    let mimeType = 'audio/webm';
+    if (typeof MediaRecorder !== 'undefined') {
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        // Try Safari-compatible fallback
+        mimeType = '';
+        console.warn('audio/webm not supported, falling back to default mimeType');
       }
     }
-
-    mediaRecorderRef.current.onstop = processAudio
+    console.log('Creating MediaRecorder with mimeType:', mimeType);
     try {
-      mediaRecorderRef.current.start()
-      console.log("MediaRecorder started successfully")
-      setIsRecording(true)
-      isRecordingRef.current = true
-      playChime("start")
+      const recorder = new MediaRecorder(streamRef.current, mimeType ? { mimeType } : undefined);
+      mediaRecorderRef.current = recorder
+      mediaRecorderRef.current.ondataavailable = (event) => {
+        console.log("MediaRecorder ondataavailable:", event.data.size, "bytes")
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data)
+          console.log("Added audio chunk, total chunks:", audioChunksRef.current.length)
+        } else {
+          console.warn("Received empty audio chunk")
+        }
+      }
+
+      mediaRecorderRef.current.onstop = processAudio
+      try {
+        mediaRecorderRef.current.start()
+        console.log("MediaRecorder started successfully")
+        setIsRecording(true)
+        isRecordingRef.current = true
+        playChime("start")
+      } catch (err) {
+        console.error("Failed to start MediaRecorder:", err)
+        setIsRecording(false)
+        isRecordingRef.current = false
+        toast({
+          title: "Could not start recording",
+          description: "Please check your microphone permissions, ensure no other app is using the mic, and try again.",
+          variant: "destructive",
+        });
+      }
+
+      // When you start a new recording, reset the ref:
+      fullRecognitionTranscriptRef.current = "";
+
+      startSpeechRecognition()
     } catch (err) {
-      console.error("Failed to start MediaRecorder:", err)
+      console.error("Failed to create MediaRecorder:", err)
       setIsRecording(false)
       isRecordingRef.current = false
       toast({
         title: "Could not start recording",
-        description: "Please check your microphone permissions, ensure no other app is using the mic, and try again.",
+        description: "Failed to create MediaRecorder. Please check your browser and microphone permissions.",
         variant: "destructive",
       });
     }
-
-    // When you start a new recording, reset the ref:
-    fullRecognitionTranscriptRef.current = "";
-
-    startSpeechRecognition()
   }
 
   const stopRecording = () => {
@@ -688,7 +784,7 @@ export default function TalkToMyself() {
 
       setTimeout(() => speakSummary(summary), 1000)
 
-      // Save to Supabase
+      // Save to Supabase with device info and service tracking
       if (userId) {
         try {
           await saveReflectionToSupabase({
@@ -697,6 +793,11 @@ export default function TalkToMyself() {
             summary,
             emotions,
             vocal: vocalCharacteristics,
+            device_info: getDeviceInfo(),
+            browser_info: getBrowserInfo(),
+            location_info: null, // Could add geolocation if needed
+            tts_service_used: actualTTSService,
+            summary_service_used: globalSettings?.summary_service || 'unknown',
           });
         } catch (err) {
           console.error("Failed to save reflection to Supabase:", err);
@@ -813,19 +914,26 @@ export default function TalkToMyself() {
   const generateSummary = async (transcript: string): Promise<string> => {
     try {
       console.log("Generating summary for transcript:", transcript)
-      //  console.log("Summary service selected:", settings.summaryService);
       // Use API (keys are configured on backend)
+      console.log('Generating summary with service:', globalSettings?.summary_service);
       const response = await fetch("/api/summarize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           transcript,
-          service: settings.summaryService,
+          service: globalSettings?.summary_service, // <--- use this!
         }),
       })
-
+      console.log('Summary API response status:', response.status);
       if (!response.ok) {
-        throw new Error("Failed to generate summary")
+        const errorData = await response.json().catch(() => ({}));
+        console.error('Summary API error:', errorData);
+        toast({
+          title: "Summary failed",
+          description: errorData.error || "Could not generate a summary. Please try again later.",
+          variant: "destructive",
+        });
+        throw new Error("Failed to generate summary");
       }
 
       const data = await response.json()
@@ -905,25 +1013,35 @@ export default function TalkToMyself() {
       audio.play();
     };
 
-    if (ttsService === "elevenlabs") {
+    console.log('TTS service selected:', globalSettings?.tts_service);
+    console.log('Global settings for TTS:', {
+      tts_service: globalSettings?.tts_service,
+      elevenlabs_voice_id: globalSettings?.elevenlabs_voice_id
+    });
+    if (globalSettings?.tts_service === 'elevenlabs') {
       try {
+        const payload = { text: summary, voiceId: globalSettings.elevenlabs_voice_id || "pNInz6obpgDQGcFmaJgB" };
+        console.log('Sending ElevenLabs TTS payload:', payload);
         const response = await fetch("/api/voice/elevenlabs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: summary, voiceId: globalSettings.elevenlabs_voice_id }),
+          body: JSON.stringify(payload),
         });
+        console.log('ElevenLabs API response status:', response.status);
         if (!response.ok) throw new Error("Failed to fetch ElevenLabs audio");
         const audioBlob = await response.blob();
+        setActualTTSService("elevenlabs");
         playAudioBlob(audioBlob);
         return;
       } catch (err) {
-        // Fallback to browser TTS below
+        console.warn('Falling back to browser TTS: ElevenLabs TTS error:', err);
       }
     }
     // ...repeat for other services if needed...
 
     // Fallback: Browser TTS
     if ("speechSynthesis" in window) {
+      setActualTTSService("browser");
       const utterance = new SpeechSynthesisUtterance(summary);
       window.speechSynthesis.speak(utterance);
     }
@@ -1048,6 +1166,56 @@ export default function TalkToMyself() {
       </div>
     )
   }
+
+  // Show loading state while global settings are loading
+  if (globalSettingsLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-rose-50 via-purple-50 to-indigo-100 flex items-center justify-center">
+        <div className="text-center space-y-6">
+          <div className="relative">
+            <div className="w-20 h-20 bg-gradient-to-br from-blue-400 to-indigo-500 rounded-full mx-auto animate-pulse"></div>
+            <div className="absolute inset-0 w-20 h-20 bg-gradient-to-br from-blue-400 to-indigo-500 rounded-full mx-auto animate-ping opacity-20"></div>
+          </div>
+          <p className="text-gray-600 font-medium">Loading your personalized settings...</p>
+        </div>
+      </div>
+    )
+  }
+
+  // Show error state if global settings failed to load
+  if (globalSettingsError && !globalSettings) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-rose-50 via-purple-50 to-indigo-100 flex items-center justify-center p-6">
+        <Card className="w-full max-w-2xl shadow-2xl border-0 bg-white/90 backdrop-blur-xl">
+          <CardHeader className="text-center pb-8 pt-12">
+            <div className="relative mb-8">
+              <div className="w-16 h-16 bg-gradient-to-br from-red-400 to-red-500 rounded-full mx-auto flex items-center justify-center">
+                <AlertCircle className="w-8 h-8 text-white" />
+              </div>
+            </div>
+            <CardTitle className="text-2xl font-bold text-gray-800 mb-4">
+              Settings Unavailable
+            </CardTitle>
+            <CardDescription className="text-gray-600 text-lg">
+              We're unable to load your personalized settings at the moment.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="text-center space-y-6 pb-12">
+            <p className="text-gray-700">
+              Error: {globalSettingsError}
+            </p>
+            <Button
+              onClick={() => window.location.reload()}
+              size="lg"
+              className="bg-gradient-to-r from-purple-500 to-indigo-600 text-white font-medium px-8 py-3 rounded-xl"
+            >
+              Try Again
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
   if (hasPermission === false) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-rose-50 via-purple-50 to-indigo-100 flex items-center justify-center p-6">
@@ -1127,7 +1295,7 @@ export default function TalkToMyself() {
           // Refetch settings to update UI
           fetch('/api/global-settings')
             .then(res => res.json())
-            .then(data => setGlobalSettings(data.settings));
+            .then(data => setGlobalSettings(data.settings as GlobalSettings));
         } else {
           alert(data.error || "Failed to update settings");
         }
@@ -1508,16 +1676,16 @@ export default function TalkToMyself() {
                         : actualTTSService === "hume" ? "Hume.ai"
                         : actualTTSService === "google" ? "Google TTS"
                         : "Browser"}
-                      {settings.voiceService === "elevenlabs" && elevenLabsVoices.find(v => v.id === selectedElevenLabsVoice) && (
-                        <> - {elevenLabsVoices.find(v => v.id === selectedElevenLabsVoice)?.name}</>
+                      {globalSettings?.tts_service === "elevenlabs" && elevenLabsVoices.find(v => v.id === globalSettings.elevenlabs_voice_id) && (
+                        <> - {elevenLabsVoices.find(v => v.id === globalSettings.elevenlabs_voice_id)?.name}</>
                       )}
-                      {settings.voiceService === "google" && (
-                        <> - {selectedGoogleLang} / {selectedGoogleGender}</>
+                      {globalSettings?.tts_service === "google" && (
+                        <> - {globalSettings.google_lang || selectedGoogleLang} / {globalSettings.google_gender || selectedGoogleGender}</>
                       )}
-                      {settings.voiceService === "hume" && (
-                        <> - {selectedHumeVoice}</>
+                      {globalSettings?.tts_service === "hume" && (
+                        <> - {globalSettings.hume_voice || selectedHumeVoice}</>
                       )}
-                      {settings.voiceService === "browser" && <> - System Voice</>}
+                      {globalSettings?.tts_service === "browser" && <> - System Voice</>}
                     </Badge>
                   </div>
                 )}
@@ -1658,9 +1826,7 @@ export default function TalkToMyself() {
                       <span>Your Words</span>
                     </CardTitle>
                     <CardDescription className="text-gray-600 text-lg">
-                      {settings.geminiKey
-                        ? "Transcribed using Google AI Speech-to-Text"
-                        : "Transcribed using browser speech recognition"}
+                      Transcribed using Google AI Speech-to-Text
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="p-12">

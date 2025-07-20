@@ -9,7 +9,8 @@ export async function POST(request: Request) {
   try {
     // Parse text and voiceId from request body
     const { text, voiceId = "pNInz6obpgDQGcFmaJgB" } = await request.json()
-
+    
+    console.log('ElevenLabs request payload:', { text, voiceId });
     if (!text) {
       return Response.json({ error: "Text is required" }, { status: 400 })
     }
@@ -40,9 +41,13 @@ export async function POST(request: Request) {
       }),
     })
 
+    console.log('ElevenLabs API response status:', response.status);
+    
     if (!response.ok) {
       // Log and return error if ElevenLabs API fails
-      throw new Error("Failed to generate speech")
+      const errorText = await response.text().catch(() => 'Unknown error');
+      console.error('ElevenLabs API error response:', errorText);
+      throw new Error(`ElevenLabs API failed: ${response.status} - ${errorText}`)
     }
 
     // Return audio buffer as audio/mpeg

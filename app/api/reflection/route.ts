@@ -39,7 +39,7 @@ export async function POST(request: Request) {
       { id: userId, last_active: new Date() }
     ], { onConflict: 'id' });
 
-    // Insert reflection for this user
+    // Insert reflection for this user with device info and service tracking
     const { error } = await supabase.from('reflections').insert([
       {
         user_id: userId,
@@ -47,6 +47,11 @@ export async function POST(request: Request) {
         summary,
         emotions,
         vocal,
+        device_info: body.device_info || null,
+        browser_info: body.browser_info || null,
+        location_info: body.location_info || null,
+        tts_service_used: body.tts_service_used || null,
+        summary_service_used: body.summary_service_used || null,
       },
     ]);
 
