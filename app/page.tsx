@@ -30,6 +30,7 @@ import {
   Heart,
   Waves,
   AlertCircle,
+  // 🗑️ DEAD CODE: These icons are imported but never used in the UI - can be removed
   CheckCircle,
   Lock,
   Pause,
@@ -38,6 +39,7 @@ import {
 import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/use-toast"
 import { v4 as uuidv4 } from 'uuid';
+// 🗑️ DEAD CODE: This Supabase client is created but never used - can be removed
 import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 
@@ -62,8 +64,10 @@ interface SessionData {
   emotions: EmotionAnalysis[]
   vocalCharacteristics: VocalCharacteristics
   audioBlob?: Blob
+  recordingDuration?: number
 }
 
+// 🗑️ DEAD CODE: This Supabase client is created but never used - can be removed
 // Initialize Supabase client for browser use. These values are public and safe to expose.
 // Make sure to set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in your .env and Vercel dashboard.
 const supabase = createSupabaseClient(
@@ -81,6 +85,7 @@ type GlobalSettings = {
 };
 
 // Add browser detection utilities at the top of the component:
+// 🗑️ DEAD CODE: These browser detection variables are defined but never used - can be removed
 const isSafari = typeof window !== 'undefined' && /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
 const isFirefox = typeof window !== 'undefined' && navigator.userAgent.toLowerCase().indexOf('firefox') > -1;
 
@@ -92,12 +97,22 @@ export default function TalkToMyself() {
   const [processingStage, setProcessingStage] = useState("")
   const [progress, setProgress] = useState(0)
   const [sessions, setSessions] = useState<SessionData[]>([])
+  
+  // Debug sessions state changes
+  useEffect(() => {
+    console.log("Sessions state updated:", sessions.length, "sessions");
+    if (sessions.length > 0) {
+      console.log("First session:", sessions[0]);
+      console.log("Last session:", sessions[sessions.length - 1]);
+    }
+  }, [sessions]);
   const [currentSession, setCurrentSession] = useState<SessionData | null>(null)
   const [activeTab, setActiveTab] = useState("record")
   const [isAdmin, setIsAdmin] = useState(false)
   // Removed old local settings - now using global settings only
-  const [recordingTime, setRecordingTime] = useState(0)
+  // 🗑️ DEAD CODE: This breathing animation is purely cosmetic - can be removed if you want to simplify the UI
   const [breathingPhase, setBreathingPhase] = useState<"inhale" | "exhale">("inhale")
+  // 🗑️ DEAD CODE: This entire API credit system is unused - can be removed
   const [apiCredits, setApiCredits] = useState<Record<string, string | null>>({})
   const [isCheckingCredits, setIsCheckingCredits] = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
@@ -105,13 +120,15 @@ export default function TalkToMyself() {
   const [utteranceRef, setUtteranceRef] = useState<SpeechSynthesisUtterance | null>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
+  // 🗑️ DEAD CODE: These audio analysis refs are created but the audio analysis is never displayed - can be removed
   const audioContextRef = useRef<AudioContext | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
-  const recordingTimerRef = useRef<number | null>(null)
-  const breathingTimerRef = useRef<number | null>(null)
+  const breathingTimerRef = useRef<NodeJS.Timeout | null>(null)
   const recognitionRef = useRef<any>(null)
   const isRecordingRef = useRef(false)
+  const currentRecordingTimeRef = useRef(0)
+  // 🗑️ DEAD CODE: Live transcript is captured but never displayed in the UI - can be removed
   const [liveTranscript, setLiveTranscript] = useState("");
   const [showLiveTranscript, setShowLiveTranscript] = useState(true);
   const { toast } = useToast();
@@ -119,10 +136,12 @@ export default function TalkToMyself() {
   const [serviceStatus, setServiceStatus] = useState({ huggingface: false, google: false });
   const [actualTTSService, setActualTTSService] = useState<string>("browser");
   const [userId, setUserId] = useState<string>("");
+  // 🗑️ DEAD CODE: This counts speech errors but the count isn't displayed - could be simplified to just show/hide the error message
   const [speechErrorCount, setSpeechErrorCount] = useState(0);
   const [speechRecognitionError, setSpeechRecognitionError] = useState<string | null>(null);
   const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
   const MAX_SPEECH_ERRORS = 3;
+  // 🗑️ DEAD CODE: These voice selection variables are set but never used for actual voice selection - can be removed
   const [selectedElevenLabsVoice, setSelectedElevenLabsVoice] = useState<string>("pNInz6obpgDQGcFmaJgB");
   const [elevenLabsVoices, setElevenLabsVoices] = useState<{id: string, name: string}[]>([]);
   const [selectedGoogleLang, setSelectedGoogleLang] = useState<string>("en-US");
@@ -133,6 +152,12 @@ export default function TalkToMyself() {
   const [globalSettings, setGlobalSettings] = useState<GlobalSettings | null>(null);
   const [globalSettingsLoading, setGlobalSettingsLoading] = useState(true);
   const [globalSettingsError, setGlobalSettingsError] = useState<string | null>(null);
+
+  // Helper function to calculate exact word counts
+  const calculateWordCount = (text: string) => {
+    if (!text) return 0;
+    return text.trim().split(/\s+/).length;
+  };
 
   // Function to collect device and browser information
   const getDeviceInfo = () => {
@@ -261,25 +286,15 @@ export default function TalkToMyself() {
     }
   }, [])
 
-  // Recording timer
+
+
+  // ONLY timer we need - the red bubble counter
   useEffect(() => {
     if (isRecording) {
-      recordingTimerRef.current = setInterval(() => {
-        if (isRecordingRef.current) {
-          setRecordingTime((prev) => prev + 1)
-        }
+      const interval = setInterval(() => {
+        currentRecordingTimeRef.current += 1
       }, 1000)
-    } else {
-      if (recordingTimerRef.current) {
-        clearInterval(recordingTimerRef.current)
-      }
-      setRecordingTime(0)
-    }
-
-    return () => {
-      if (recordingTimerRef.current) {
-        clearInterval(recordingTimerRef.current)
-      }
+      return () => clearInterval(interval)
     }
   }, [isRecording])
 
@@ -360,7 +375,7 @@ export default function TalkToMyself() {
       return;
     }
     navigator.mediaDevices.getUserMedia({ audio: true })
-      .then((stream) => {
+      .then((stream: MediaStream) => {
         streamRef.current = stream;
         setHasPermission(true);
         setIsRequestingMic(false);
@@ -374,7 +389,7 @@ export default function TalkToMyself() {
   };
 
   // Separate function for post-permission logic
-  const initializeMicrophoneAfterPermission = (stream) => {
+  const initializeMicrophoneAfterPermission = (stream: MediaStream) => {
     // ...rest of your microphone initialization logic that does not require user gesture...
   };
 
@@ -418,6 +433,8 @@ export default function TalkToMyself() {
       setIsSpeaking(false)
     }
 
+    // Reset recording time for new session
+    currentRecordingTimeRef.current = 0
     audioChunksRef.current = []
     console.log("Starting MediaRecorder with stream:", streamRef.current)
     console.log("Stream tracks:", streamRef.current.getTracks())
@@ -435,38 +452,38 @@ export default function TalkToMyself() {
     try {
       const recorder = new MediaRecorder(streamRef.current, mimeType ? { mimeType } : undefined);
       mediaRecorderRef.current = recorder
-      mediaRecorderRef.current.ondataavailable = (event) => {
-        console.log("MediaRecorder ondataavailable:", event.data.size, "bytes")
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data)
-          console.log("Added audio chunk, total chunks:", audioChunksRef.current.length)
-        } else {
-          console.warn("Received empty audio chunk")
-        }
+    mediaRecorderRef.current.ondataavailable = (event) => {
+      console.log("MediaRecorder ondataavailable:", event.data.size, "bytes")
+      if (event.data.size > 0) {
+        audioChunksRef.current.push(event.data)
+        console.log("Added audio chunk, total chunks:", audioChunksRef.current.length)
+      } else {
+        console.warn("Received empty audio chunk")
       }
+    }
 
-      mediaRecorderRef.current.onstop = processAudio
-      try {
-        mediaRecorderRef.current.start()
-        console.log("MediaRecorder started successfully")
-        setIsRecording(true)
-        isRecordingRef.current = true
-        playChime("start")
-      } catch (err) {
-        console.error("Failed to start MediaRecorder:", err)
-        setIsRecording(false)
-        isRecordingRef.current = false
-        toast({
-          title: "Could not start recording",
-          description: "Please check your microphone permissions, ensure no other app is using the mic, and try again.",
-          variant: "destructive",
-        });
-      }
+    mediaRecorderRef.current.onstop = processAudio
+    try {
+      mediaRecorderRef.current.start()
+      console.log("MediaRecorder started successfully")
+      setIsRecording(true)
+      isRecordingRef.current = true
+      playChime("start")
+    } catch (err) {
+      console.error("Failed to start MediaRecorder:", err)
+      setIsRecording(false)
+      isRecordingRef.current = false
+      toast({
+        title: "Could not start recording",
+        description: "Please check your microphone permissions, ensure no other app is using the mic, and try again.",
+        variant: "destructive",
+      });
+    }
 
-      // When you start a new recording, reset the ref:
-      fullRecognitionTranscriptRef.current = "";
+    // When you start a new recording, reset the ref:
+    fullRecognitionTranscriptRef.current = "";
 
-      startSpeechRecognition()
+    startSpeechRecognition()
     } catch (err) {
       console.error("Failed to create MediaRecorder:", err)
       setIsRecording(false)
@@ -768,14 +785,21 @@ export default function TalkToMyself() {
       setProcessingStage("Preparing your reflection...")
       setProgress(100)
 
+      // Use ONLY the red bubble timer - store the duration directly
+      const recordingDuration = currentRecordingTimeRef.current;
+      
+      console.log("Red bubble timer shows:", recordingDuration, "seconds");
+      
       const newSession: SessionData = {
         id: Date.now().toString(),
-        timestamp: new Date(),
+        timestamp: new Date(), // Just use current time
         transcript,
         summary,
         emotions,
         vocalCharacteristics,
         audioBlob,
+        // Store the actual duration from the red bubble timer
+        recordingDuration: recordingDuration,
       }
 
       setSessions((prev) => [newSession, ...prev])
@@ -784,10 +808,11 @@ export default function TalkToMyself() {
 
       setTimeout(() => speakSummary(summary), 1000)
 
+
       // Save to Supabase with device info and service tracking
       if (userId) {
         try {
-          await saveReflectionToSupabase({
+          const reflectionData = {
             userId,
             transcript,
             summary,
@@ -798,7 +823,11 @@ export default function TalkToMyself() {
             location_info: null, // Could add geolocation if needed
             tts_service_used: actualTTSService,
             summary_service_used: globalSettings?.summary_service || 'unknown',
-          });
+            recording_duration: recordingDuration, // Store the actual duration from red bubble timer
+          };
+          console.log("Sending reflection data to Supabase:", reflectionData);
+          console.log("Recording duration from red bubble:", recordingDuration, "seconds");
+          await saveReflectionToSupabase(reflectionData);
         } catch (err) {
           console.error("Failed to save reflection to Supabase:", err);
         }
@@ -1002,14 +1031,32 @@ export default function TalkToMyself() {
   const speakSummary = async (summary: string) => {
     if (!globalSettings) return; // Wait for settings to load
 
+    // Set speaking state immediately
+    setIsSpeaking(true);
+
     const ttsService = globalSettings.tts_service;
     // Add any additional settings (voice, lang, etc.) as needed
 
     const playAudioBlob = (blob: Blob) => {
+      // Stop any existing audio first
+      const existingAudio = document.querySelector('audio');
+      if (existingAudio) {
+        existingAudio.pause();
+        existingAudio.remove();
+      }
+      
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
-      audio.onended = () => URL.revokeObjectURL(url);
-      audio.onerror = () => URL.revokeObjectURL(url);
+      
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        setIsSpeaking(false);
+      };
+      audio.onerror = () => {
+        URL.revokeObjectURL(url);
+        setIsSpeaking(false);
+      };
+      
       audio.play();
     };
 
@@ -1043,7 +1090,14 @@ export default function TalkToMyself() {
     if ("speechSynthesis" in window) {
       setActualTTSService("browser");
       const utterance = new SpeechSynthesisUtterance(summary);
+      
+      utterance.onend = () => setIsSpeaking(false);
+      utterance.onerror = () => setIsSpeaking(false);
+      
       window.speechSynthesis.speak(utterance);
+    } else {
+      // No TTS available
+        setIsSpeaking(false);
     }
   };
 
@@ -1082,12 +1136,17 @@ export default function TalkToMyself() {
   const fetchReflections = async (userId: string) => {
     if (!userId) return [];
     try {
+      console.log("Fetching reflections for user:", userId);
       const res = await fetch('/api/reflection', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId }),
       });
+      
+      console.log("Fetch response status:", res.status);
+      
       if (!res.ok) {
+        console.error("Failed to fetch reflections:", res.status, res.statusText);
         toast({
           title: 'Failed to fetch reflection history',
           description: 'There was a problem fetching your reflection history. Please try again.',
@@ -1095,18 +1154,36 @@ export default function TalkToMyself() {
         });
         return [];
       }
+      
       const data = await res.json();
+      console.log("Raw reflection data from API:", data);
+      
       // Map DB rows to SessionData shape
-      return (data.reflections || []).map((row: any) => ({
-        id: row.id,
-        timestamp: new Date(row.created_at),
-        transcript: row.transcript,
-        summary: row.summary,
-        emotions: row.emotions || [],
-        vocalCharacteristics: row.vocal || {},
-        audioBlob: undefined, // Not stored in DB
-      }));
+      const mappedSessions = (data.reflections || []).map((row: any) => {
+        console.log("Mapping row:", row);
+        return {
+          id: row.id,
+          timestamp: new Date(row.created_at),
+          transcript: row.transcript,
+          summary: row.summary,
+          emotions: row.emotions || [],
+          vocalCharacteristics: row.vocal || {},
+          audioBlob: undefined, // Not stored in DB
+          recordingDuration: (() => {
+            // New format: duration stored in device_info.recording_duration_seconds
+            if (row.device_info && typeof row.device_info === 'object' && row.device_info.recording_duration_seconds) {
+              return row.device_info.recording_duration_seconds;
+            }
+            // Fallback: return 0 for old records without duration
+            return 0;
+          })(),
+        };
+      });
+      
+      console.log("Mapped sessions:", mappedSessions);
+      return mappedSessions;
     } catch (err) {
+      console.error("Error fetching reflections:", err);
       toast({
         title: 'Failed to fetch reflection history',
         description: 'There was a problem fetching your reflection history. Please try again.',
@@ -1119,6 +1196,7 @@ export default function TalkToMyself() {
   // Fetch on mount and when userId changes
   useEffect(() => {
     if (userId) {
+      console.log("Initial fetch of reflections for user:", userId);
       fetchReflections(userId).then(setSessions);
     }
   }, [userId]);
@@ -1126,24 +1204,35 @@ export default function TalkToMyself() {
   // After saving a new reflection, re-fetch history
   const saveReflectionToSupabase = async (reflection: any) => {
     try {
+      console.log("Attempting to save reflection to Supabase:", reflection);
       const res = await fetch('/api/reflection', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(reflection),
       });
+      
+      const responseData = await res.json();
+      console.log("Supabase save response:", responseData);
+      
       if (!res.ok) {
+        console.error("Failed to save reflection:", res.status, res.statusText);
         toast({
           title: 'Failed to save reflection',
           description: 'There was a problem saving your reflection. Please try again.',
           variant: 'destructive',
         });
       } else {
+        console.log("Successfully saved reflection to Supabase");
         // Re-fetch history after successful save
         if (userId) {
-          fetchReflections(userId).then(setSessions);
+          console.log("Re-fetching reflections for user:", userId);
+          const updatedSessions = await fetchReflections(userId);
+          console.log("Updated sessions:", updatedSessions);
+          setSessions(updatedSessions);
         }
       }
     } catch (err) {
+      console.error("Error saving reflection:", err);
       toast({
         title: 'Failed to save reflection',
         description: 'There was a problem saving your reflection. Please try again.',
@@ -1430,7 +1519,8 @@ export default function TalkToMyself() {
                               <BarChart3 className="w-4 h-4" />
                               <span>Analysis</span>
                             </TabsTrigger>
-                            <TabsTrigger
+                            {/* Transcript Tab - Hidden but functionality preserved */}
+                            {/* <TabsTrigger
                               value="transcript"
                               disabled={!canSwitchTab && activeTab !== "transcript"}
                               className={cn(
@@ -1440,7 +1530,7 @@ export default function TalkToMyself() {
                             >
                               <FileText className="w-4 h-4" />
                               <span>Transcript</span>
-                            </TabsTrigger>
+                            </TabsTrigger> */}
                           </>
                         )}
                         {sessions.length > 0 && (
@@ -1500,7 +1590,7 @@ export default function TalkToMyself() {
                         {isRecording ? (
                           <div className="flex flex-col items-center space-y-2">
                             <MicOff className="w-16 h-16 text-white" />
-                            <span className="text-white text-sm font-medium">{formatTime(recordingTime)}</span>
+                            <span className="text-white text-sm font-medium">{formatTime(currentRecordingTimeRef.current)}</span>
                           </div>
                         ) : (
                           <Mic className="w-16 h-16 text-white" />
@@ -1617,12 +1707,30 @@ export default function TalkToMyself() {
                       <div className="flex items-center space-x-3">
                         <Button
                           variant="outline"
-                          onClick={() => speakSummary(currentSession.summary)}
+                          onClick={() => {
+                            // Stop any current speech before starting new
+                            if (speechSynthesis.speaking) {
+                              speechSynthesis.cancel();
+                            }
+                            // Clear any existing audio elements
+                            const existingAudio = document.querySelector('audio');
+                            if (existingAudio) {
+                              existingAudio.pause();
+                              existingAudio.remove();
+                            }
+                            // Reset speaking state
+                            setIsSpeaking(false);
+                            setIsPaused(false);
+                            // Start new speech
+                            speakSummary(currentSession.summary);
+                          }}
                           disabled={isSpeaking}
                           className="flex items-center space-x-2 bg-white/80 border-purple-200 hover:bg-purple-50 rounded-xl px-6 py-3"
                         >
                           <Volume2 className="w-5 h-5 text-purple-600" />
-                          <span className="text-purple-600 font-medium">Listen Again</span>
+                          <span className="text-purple-600 font-medium">
+                            {isSpeaking ? "Playing..." : "Listen Again"}
+                          </span>
                         </Button>
 
                         {isSpeaking && (
@@ -1814,8 +1922,8 @@ export default function TalkToMyself() {
               </TabsContent>
             )}
 
-            {/* Transcript Tab */}
-            {currentSession && currentSession.transcript && (
+            {/* Transcript Tab - Hidden but functionality preserved */}
+            {/* {currentSession && currentSession.transcript && (
               <TabsContent value="transcript" className="space-y-8">
                 <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
                   <CardHeader className="bg-gradient-to-r from-gray-50 to-slate-50 p-8">
@@ -1837,8 +1945,23 @@ export default function TalkToMyself() {
                     </div>
                   </CardContent>
                 </Card>
+                {currentSession && (
+                  <div className="text-sm text-gray-500 mt-2">
+                    {(() => {
+                      const transcriptWords = calculateWordCount(currentSession.transcript || '');
+                      const summaryWords = calculateWordCount(currentSession.summary || '');
+                      
+                      // Use the stored recording duration from the red bubble timer
+                      const duration = currentSession.recordingDuration || 0;
+                      
+                      const m = Math.floor(duration / 60);
+                      const s = Math.round(duration % 60);
+                      return `Transcript: ${transcriptWords} words | Summary: ${summaryWords} words | Duration: ${m}:${s.toString().padStart(2, '0')} min`;
+                    })()}
+                  </div>
+                )}
               </TabsContent>
-            )}
+            )} */}
 
             {/* History Tab */}
             {sessions.filter(s => s.transcript).length > 0 && (
@@ -1902,6 +2025,19 @@ export default function TalkToMyself() {
                               ))}
                             </div>
                           </div>
+                          <div className="text-xs text-gray-500 mt-1">
+                            {(() => {
+                              const transcriptWords = calculateWordCount(session.transcript || '');
+                              const summaryWords = calculateWordCount(session.summary || '');
+                              
+                              // Use the stored recording duration from the red bubble timer
+                              const duration = session.recordingDuration || 0;
+                              
+                              const m = Math.floor(duration / 60);
+                              const s = Math.round(duration % 60);
+                              return `${transcriptWords} words | ${summaryWords} words | ${m}:${s.toString().padStart(2, '0')} min`;
+                            })()}
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -1942,10 +2078,10 @@ export default function TalkToMyself() {
                         <option value="claude">Anthropic Claude</option>
                       </select>
                       <div className="text-sm text-gray-500">Current: {globalSettings?.summary_service}</div>
-                    </div>
+                      </div>
                     <div className="flex flex-col gap-4 mt-6">
                       <label className="font-medium text-gray-700">TTS (Voice) Service</label>
-                      <select
+                        <select
                         className="w-full max-w-xs p-2 border rounded"
                         value={globalSettings?.tts_service || ''}
                         onChange={e => handleGlobalSettingsChange({ tts_service: e.target.value })}
@@ -1954,19 +2090,19 @@ export default function TalkToMyself() {
                         <option value="elevenlabs">ElevenLabs</option>
                         <option value="google">Google TTS</option>
                         <option value="hume">Hume.ai</option>
-                      </select>
+                        </select>
                       <div className="text-sm text-gray-500">Current: {globalSettings?.tts_service}</div>
-                    </div>
+                      </div>
                     {/* Add similar controls for elevenlabs_voice_id, google_lang, google_gender, hume_voice if needed */}
                     <label>ElevenLabs Voice</label>
-                    <select
+                            <select
                       value={globalSettings?.elevenlabs_voice_id || ''}
                       onChange={e => handleGlobalSettingsChange({ elevenlabs_voice_id: e.target.value })}
-                    >
-                      {elevenLabsVoices.map(v => (
-                        <option key={v.id} value={v.id}>{v.name}</option>
-                      ))}
-                    </select>
+                            >
+                              {elevenLabsVoices.map(v => (
+                                <option key={v.id} value={v.id}>{v.name}</option>
+                              ))}
+                            </select>
                     <label>Hume Voice</label>
                     <input
                       type="text"
@@ -1980,14 +2116,14 @@ export default function TalkToMyself() {
                       onChange={e => handleGlobalSettingsChange({ google_lang: e.target.value })}
                     />
                     <label>Google TTS Gender</label>
-                    <select
+                            <select
                       value={globalSettings?.google_gender || ''}
                       onChange={e => handleGlobalSettingsChange({ google_gender: e.target.value })}
-                    >
-                      <option value="FEMALE">Female</option>
-                      <option value="MALE">Male</option>
-                    </select>
-                  </div>
+                            >
+                              <option value="FEMALE">Female</option>
+                              <option value="MALE">Male</option>
+                            </select>
+                          </div>
                   {/* Service Status Section */}
                   <div className="space-y-6">
                     <h3 className="text-xl font-semibold text-gray-800">Service Status</h3>
@@ -1998,8 +2134,8 @@ export default function TalkToMyself() {
             </TabsContent>
             )}
           </Tabs>
-                    </div>
-                  </div>
+        </div>
+      </div>
     </TooltipProvider>
   )
 }

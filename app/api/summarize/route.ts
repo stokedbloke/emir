@@ -58,7 +58,7 @@ export async function POST(request: Request) {
     const { text } = await generateText({
       model,
       prompt,
-      maxTokens: 80, // Limit to ensure ~50 words
+      maxTokens: 300, // Increased from 80 to allow ~200-250 words
       temperature: 0.7,
     })
 
