@@ -796,6 +796,14 @@ export default function TalkToMyself() {
       console.log("Vocal characteristics:", vocalCharacteristics);
       
       const trimmedSummary = summary.trim();
+      
+      // Start TTS generation in parallel while we process the results
+      // This reduces perceived wait time by starting audio generation early
+      let ttsPromise: Promise<void> | null = null;
+      if (globalSettings?.tts_service === 'elevenlabs' && globalSettings?.elevenlabs_voice_id) {
+        // Start TTS generation immediately after we have the summary
+        ttsPromise = speakSummary(trimmedSummary);
+      }
       const lowerSummary = trimmedSummary.toLowerCase();
       if (
         !trimmedSummary ||
@@ -834,33 +842,44 @@ export default function TalkToMyself() {
       setCurrentSession(newSession)
       setActiveTab("summary")
 
-      // Auto-play the summary immediately with default voice for fast user experience
-      // Voice cloning can happen in background if user requests it later
-      setTimeout(() => speakSummary(trimmedSummary), 1000);
+      // Auto-play the summary immediately for fast user experience
+      // If TTS is already generating, it will play when ready
+      // Otherwise, start it with a small delay
+      if (ttsPromise) {
+        // TTS is already generating, it will play when ready
+        console.log("TTS already generating, will play when ready");
+      } else {
+        // Start TTS with a small delay for immediate user feedback
+        setTimeout(() => speakSummary(trimmedSummary), 1000);
+      }
 
 
-      // Save to Supabase with device info and service tracking
+      // Save to Supabase in background - don't block user experience
       if (userId) {
-        try {
-          const reflectionData = {
-            userId,
-            transcript,
-            summary,
-            emotions,
-            vocal: vocalCharacteristics,
-            device_info: getDeviceInfo(),
-            browser_info: getBrowserInfo(),
-            location_info: null, // Could add geolocation if needed
-            tts_service_used: actualTTSService,
-            summary_service_used: globalSettings?.summary_service || 'unknown',
-            recording_duration: recordingDuration, // Store the actual duration from red bubble timer
-          };
-          console.log("Sending reflection data to Supabase:", reflectionData);
-          console.log("Recording duration from red bubble:", recordingDuration, "seconds");
-          await saveReflectionToSupabase(reflectionData);
-        } catch (err) {
-          console.error("Failed to save reflection to Supabase:", err);
-        }
+        // Run Supabase save in background without blocking the UI
+        (async () => {
+          try {
+            const reflectionData = {
+              userId,
+              transcript,
+              summary,
+              emotions,
+              vocal: vocalCharacteristics,
+              device_info: getDeviceInfo(),
+              browser_info: getBrowserInfo(),
+              location_info: null, // Could add geolocation if needed
+              tts_service_used: actualTTSService,
+              summary_service_used: globalSettings?.summary_service || 'unknown',
+              recording_duration: recordingDuration, // Store the actual duration from red bubble timer
+            };
+            console.log("Sending reflection data to Supabase (background):", reflectionData);
+            console.log("Recording duration from red bubble:", recordingDuration, "seconds");
+            await saveReflectionToSupabase(reflectionData);
+            console.log("Reflection saved to Supabase successfully");
+          } catch (err) {
+            console.error("Failed to save reflection to Supabase:", err);
+          }
+        })();
       }
     } catch (error) {
       console.error("Processing error:", error)
