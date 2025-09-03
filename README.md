@@ -51,6 +51,39 @@ Continue building your app on:
 
 **Note:** Some cases (user ID across browsers/devices, storage clearing, etc.) require testing in a deployed (production) environment, not just locally.
 
+## Mobile Testing
+
+### Local Development Testing
+To test the app on mobile devices during development:
+
+1. **Same WiFi Network**:
+   - Find your computer's local IP address (e.g., `192.168.1.100`)
+   - Access `http://192.168.1.100:3000` on your mobile device
+   - Both devices must be on the same WiFi network
+
+2. **ngrok Tunnel** (Recommended for external testing):
+   ```bash
+   # Install ngrok
+   npm install -g ngrok
+   
+   # Create tunnel to your localhost
+   ngrok http 3000
+   
+   # Use the provided public URL on any device
+   # Example: https://abc123.ngrok.io
+   ```
+
+3. **Vercel Preview Deployments**:
+   - Push to a feature branch
+   - Vercel automatically creates preview deployments
+   - Test on mobile using the preview URL
+
+### Mobile-Specific Considerations
+- **Touch Interactions**: Voice recording works with touch gestures
+- **Audio Permissions**: Mobile browsers may require explicit microphone permission
+- **Responsive Design**: UI adapts to mobile screen sizes
+- **Voice Cloning**: Works identically on mobile and desktop
+
 ## Environment Variables
 
 Below are all environment variables required for this project, with their purpose and visibility:
@@ -72,6 +105,37 @@ Below are all environment variables required for this project, with their purpos
 **Public variables** (those prefixed with `NEXT_PUBLIC_`) are exposed to the browser and must not contain sensitive information. All other variables are private and only available to server-side code (API routes, server functions).
 
 **Note:** Vercel and Next.js automatically determine public/private status based on the variable name prefix. No extra configuration is needed—just use the correct naming convention.
+
+## Voice Cloning Feature
+
+### Overview
+The app now includes an ElevenLabs-powered voice cloning feature that allows users to create personalized voice clones from their audio recordings. This feature is designed to be simple and user-friendly while maintaining privacy and managing API usage efficiently.
+
+### How It Works
+1. **Voice Clone Creation**: Users can clone their voice after recording a reflection by clicking "Clone Voice"
+2. **Voice Clone Replacement**: Existing voice clones can be "improved" by replacing them with new audio recordings
+3. **Automatic TTS**: Once a voice clone is created, it's automatically used for text-to-speech instead of the default voice
+4. **One Clone Per User**: The system maintains only one voice clone per user to prevent API quota accumulation
+
+### Technical Implementation
+- **API Endpoints**:
+  - `POST /api/voice-clone` - Creates new voice clones
+  - `POST /api/voice-clone/improve` - Replaces existing voice clones with improved versions
+  - `DELETE /api/voice-clone/delete` - Removes voice clones
+- **ElevenLabs Integration**: Uses instant voice cloning API for immediate use
+- **Audio Processing**: Converts WebM audio to the format required by ElevenLabs
+- **State Management**: Voice clone IDs are persisted in localStorage and managed in React state
+
+### User Experience
+- **Simple Toggle**: Single button to clone/replace voice
+- **Immediate Feedback**: Toast notifications for success/failure states
+- **Seamless Integration**: Voice clones automatically used for TTS without additional configuration
+- **Manual Control**: Users can manually delete voice clones when desired
+
+### Privacy & Security
+- Audio recordings are processed by ElevenLabs but not permanently stored
+- Voice clone IDs are stored locally and not shared across devices
+- No audio data is stored in the app's database
 
 ## Global Admin Settings for Summary and TTS
 

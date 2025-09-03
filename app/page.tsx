@@ -152,6 +152,12 @@ export default function TalkToMyself() {
   const [globalSettings, setGlobalSettings] = useState<GlobalSettings | null>(null);
   const [globalSettingsLoading, setGlobalSettingsLoading] = useState(true);
   const [globalSettingsError, setGlobalSettingsError] = useState<string | null>(null);
+  
+  // Voice clone state management
+  const [userVoiceCloneId, setUserVoiceCloneId] = useState<string | null>(null);
+  const [isCloningVoice, setIsCloningVoice] = useState(false);
+  const [hasVoiceClone, setHasVoiceClone] = useState(false);
+  const [hasRequestedVoiceClone, setHasRequestedVoiceClone] = useState(false);
 
   // Helper function to calculate exact word counts
   const calculateWordCount = (text: string) => {
@@ -256,6 +262,19 @@ export default function TalkToMyself() {
     }
     setUserId(id);
   }, []);
+
+  // Load voice clone state from localStorage
+  useEffect(() => {
+    if (userId) {
+      const storedVoiceId = localStorage.getItem(`em-voice-clone-${userId}`);
+      console.log('Loading voice clone state:', { userId, storedVoiceId });
+      if (storedVoiceId) {
+        setUserVoiceCloneId(storedVoiceId);
+        setHasVoiceClone(true);
+        console.log('Voice clone loaded from localStorage:', storedVoiceId);
+      }
+    }
+  }, [userId]);
 
   useEffect(() => {
     fetch('/api/status')
@@ -427,6 +446,12 @@ export default function TalkToMyself() {
       });
       return
     }
+
+    // Don't delete voice clone when starting new recording - let it persist across sessions
+    // Voice clone will only be deleted when user explicitly starts a new session or when handleVoiceClone is called
+    
+    // Don't reset voice clone request flag - let it persist across sessions
+    // Voice clone will only be deleted when user explicitly clicks "Delete Clone"
 
     if (speechSynthesis.speaking) {
       speechSynthesis.cancel()
@@ -735,6 +760,7 @@ export default function TalkToMyself() {
       }
 
       let transcript = (await transcribeAudio(audioBlob)).trim();
+      
       // Remove trigger phrase from the end of the transcript
       const triggers = [
         "i am complete", "i'm complete"
@@ -806,7 +832,17 @@ export default function TalkToMyself() {
       setCurrentSession(newSession)
       setActiveTab("summary")
 
-      setTimeout(() => speakSummary(summary), 1000)
+      // Auto-play the summary
+      // If we have a voice clone, it will be used; otherwise, default voice will be used
+      // Auto-play the summary
+      // If user requested voice clone, wait for it to be ready; otherwise, play immediately
+      if (hasRequestedVoiceClone) {
+        // Don't auto-play - wait for voice clone to be ready
+        console.log('Waiting for voice clone to be ready before auto-playing');
+      } else {
+        // Auto-play immediately with default voice
+        setTimeout(() => speakSummary(summary), 1000);
+      }
 
 
       // Save to Supabase with device info and service tracking
@@ -1028,6 +1064,164 @@ export default function TalkToMyself() {
     fetchVoices();
   }, []);
 
+
+
+  const handleDeleteVoiceClone = async () => {
+    try {
+      if (userVoiceCloneId) {
+        // Delete voice clone from ElevenLabs
+        await fetch('/api/voice-clone/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ voiceId: userVoiceCloneId, userId }),
+        });
+        
+        // Clear local state
+        setUserVoiceCloneId(null);
+        setHasVoiceClone(false);
+        setHasRequestedVoiceClone(false);
+        localStorage.removeItem(`em-voice-clone-${userId}`);
+        
+        toast({
+          title: "Voice clone deleted",
+          description: "You're now using the default voice for TTS.",
+        });
+      }
+    } catch (error) {
+      console.error('Failed to delete voice clone:', error);
+      toast({
+        title: "Failed to delete voice clone",
+        description: "Please try again or contact support.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  /**
+   * Handles voice cloning functionality using ElevenLabs API
+   * 
+   * This function manages both creating new voice clones and improving existing ones.
+   * When a user already has a voice clone, it will replace it with an improved version
+   * using the current audio recording. This ensures only one voice clone per user.
+   * 
+   * Flow:
+   * 1. Check if audio is available from current session
+   * 2. If user has existing voice clone → improve/replace it
+   * 3. If no existing clone → create new one
+   * 4. Update local state and localStorage
+   * 5. Show appropriate success/error messages
+   * 
+   * Note: The "improve" functionality actually deletes the old clone and creates
+   * a new one with the latest audio, rather than truly combining audio samples.
+   */
+  const handleVoiceClone = async () => {
+      // Validate that we have audio to work with
+      if (!currentSession?.audioBlob) {
+        toast({
+          title: "No audio available",
+          description: "Please record a reflection first to clone your voice.",
+          variant: "destructive",
+        });
+        return;
+      }
+      
+      setIsCloningVoice(true);
+      setHasRequestedVoiceClone(true); // Mark that user wants voice clone
+      try {
+        // Create a new blob to ensure it's fresh
+        const audioBlob = new Blob([currentSession.audioBlob], { type: currentSession.audioBlob.type });
+        console.log('Fresh audio blob for FormData:', {
+          size: audioBlob.size,
+          type: audioBlob.type
+        });
+        
+        const formData = new FormData();
+        formData.append('audio', audioBlob, 'recording.webm');
+        formData.append('userId', userId);
+        
+        // If we already have a voice clone, improve it instead of creating a new one
+        // This ensures we maintain only one voice clone per user
+        if (hasVoiceClone && userVoiceCloneId) {
+          formData.append('voiceId', userVoiceCloneId);
+          console.log('Improving existing voice clone:', userVoiceCloneId);
+          
+          const response = await fetch('/api/voice-clone/improve', {
+            method: 'POST',
+            body: formData,
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            console.log('Voice clone improved successfully:', data);
+            
+            // Update the voice clone ID (ElevenLabs returns a new ID for improved clones)
+            setUserVoiceCloneId(data.voiceId);
+            setHasVoiceClone(true);
+            localStorage.setItem(`em-voice-clone-${userId}`, data.voiceId);
+            
+            toast({
+              title: "Voice clone replaced! 🎉",
+              description: "Your voice clone has been replaced with a new version using the latest audio. Click 'Listen' to hear the updated voice.",
+            });
+          } else {
+            const errorData = await response.json().catch(() => ({}));
+            console.error('Voice clone improvement failed:', errorData);
+            throw new Error(errorData.error || 'Failed to improve voice clone');
+          }
+        } else {
+          // Create a new voice clone
+          console.log('Creating new voice clone for audio:', {
+            size: audioBlob.size,
+            type: audioBlob.type
+          });
+          
+          const response = await fetch('/api/voice-clone', {
+            method: 'POST',
+            body: formData,
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            console.log('Voice clone created successfully:', data);
+            
+            setUserVoiceCloneId(data.voiceId);
+            setHasVoiceClone(true);
+            localStorage.setItem(`em-voice-clone-${userId}`, data.voiceId);
+            
+            toast({
+              title: "Voice clone created! 🎉",
+              description: "Your voice clone is ready! Click 'Listen' to hear your reflection in your own voice.",
+            });
+          } else {
+            const errorData = await response.json().catch(() => ({}));
+            console.error('Voice clone creation failed:', errorData);
+            throw new Error(errorData.error || 'Failed to create voice clone');
+          }
+        }
+        
+      } catch (error) {
+        console.error('Voice clone error:', error);
+        const errorMessage = error instanceof Error ? error.message : "Please try again or use the default voice.";
+        toast({
+          title: "Voice clone failed",
+          description: errorMessage,
+          variant: "destructive",
+        });
+      } finally {
+        setIsCloningVoice(false);
+      }
+    };
+
+  /**
+   * Converts summary text to speech using the appropriate TTS service
+   * 
+   * Priority order:
+   * 1. User's voice clone (if available and working)
+   * 2. Default ElevenLabs voice (if configured)
+   * 3. Browser's built-in speech synthesis (fallback)
+   * 
+   * @param summary - The text content to convert to speech
+   */
   const speakSummary = async (summary: string) => {
     if (!globalSettings) return; // Wait for settings to load
 
@@ -1065,6 +1259,34 @@ export default function TalkToMyself() {
       tts_service: globalSettings?.tts_service,
       elevenlabs_voice_id: globalSettings?.elevenlabs_voice_id
     });
+
+    // Check if user has a voice clone and use it
+    if (userVoiceCloneId && hasVoiceClone) {
+      try {
+        const payload = { text: summary, voiceId: userVoiceCloneId };
+        console.log('Using voice clone for TTS:', payload);
+        const response = await fetch("/api/voice/elevenlabs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        
+        if (response.ok) {
+          const audioBlob = await response.blob();
+          setActualTTSService("elevenlabs");
+          console.log('Voice clone TTS successful, playing audio');
+          playAudioBlob(audioBlob);
+          return;
+        } else {
+          const errorText = await response.text().catch(() => 'Unknown error');
+          console.warn('Voice clone TTS failed:', response.status, errorText);
+        }
+      } catch (err) {
+        console.warn('Voice clone TTS failed, falling back to default:', err);
+      }
+    }
+
+    // Fallback to default ElevenLabs voice if configured
     if (globalSettings?.tts_service === 'elevenlabs') {
       try {
         const payload = { text: summary, voiceId: globalSettings.elevenlabs_voice_id || "pNInz6obpgDQGcFmaJgB" };
@@ -1729,9 +1951,69 @@ export default function TalkToMyself() {
                         >
                           <Volume2 className="w-5 h-5 text-purple-600" />
                           <span className="text-purple-600 font-medium">
-                            {isSpeaking ? "Playing..." : "Listen Again"}
+                            {isSpeaking ? "Playing..." : "Listen"}
                           </span>
                         </Button>
+
+                        {/* Voice Clone Toggle */}
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="outline"
+                              onClick={handleVoiceClone}
+                              disabled={isCloningVoice || isSpeaking}
+                              className={cn(
+                                "flex items-center space-x-2 rounded-xl px-6 py-3 transition-all duration-300",
+                                hasVoiceClone 
+                                  ? "bg-green-50 border-green-200 hover:bg-green-100" 
+                                  : "bg-white/80 border-blue-200 hover:bg-blue-50"
+                              )}
+                            >
+                              {isCloningVoice ? (
+                                <>
+                                  <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                                  <span className="text-blue-600 font-medium">Cloning...</span>
+                                </>
+                              ) : hasVoiceClone ? (
+                                <>
+                                  <Mic className="w-5 h-5 text-green-600" />
+                                  <span className="text-green-600 font-medium">Replace Voice Clone</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Mic className="w-5 h-5 text-blue-600" />
+                                  <span className="text-blue-600 font-medium">Clone Voice</span>
+                                </>
+                              )}
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            {hasVoiceClone 
+                              ? "Replace your existing voice clone with a new version using the current audio recording. This will create a fresh voice clone with the latest audio data."
+                              : "Clone your voice to hear reflections in your own voice. Audio is processed by ElevenLabs and not stored permanently."
+                            }
+                          </TooltipContent>
+                        </Tooltip>
+
+                        {/* Delete Clone Button - only show when voice clone exists */}
+                        {hasVoiceClone && userVoiceCloneId && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="outline"
+                                onClick={handleDeleteVoiceClone}
+                                disabled={isSpeaking}
+                                className="flex items-center space-x-2 bg-white/80 border-red-200 hover:bg-red-50 rounded-xl px-6 py-3"
+                              >
+                                <MicOff className="w-5 h-5 text-red-600" />
+                                <span className="text-red-600 font-medium">Delete Clone</span>
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              Delete your voice clone and return to using the default voice
+                            </TooltipContent>
+                          </Tooltip>
+                        )}
 
                         {isSpeaking && (
                           <Button
@@ -1784,7 +2066,10 @@ export default function TalkToMyself() {
                         : actualTTSService === "hume" ? "Hume.ai"
                         : actualTTSService === "google" ? "Google TTS"
                         : "Browser"}
-                      {globalSettings?.tts_service === "elevenlabs" && elevenLabsVoices.find(v => v.id === globalSettings.elevenlabs_voice_id) && (
+                      {hasVoiceClone && userVoiceCloneId && (
+                        <> - Your Voice Clone</>
+                      )}
+                      {!hasVoiceClone && globalSettings?.tts_service === "elevenlabs" && elevenLabsVoices.find(v => v.id === globalSettings.elevenlabs_voice_id) && (
                         <> - {elevenLabsVoices.find(v => v.id === globalSettings.elevenlabs_voice_id)?.name}</>
                       )}
                       {globalSettings?.tts_service === "google" && (
@@ -1954,6 +2239,10 @@ export default function TalkToMyself() {
                       // Use the stored recording duration from the red bubble timer
                       const duration = currentSession.recordingDuration || 0;
                       
+                      if (duration === 0) {
+                        return `Transcript: ${transcriptWords} words | Summary: ${summaryWords} words`;
+                      }
+                      
                       const m = Math.floor(duration / 60);
                       const s = Math.round(duration % 60);
                       return `Transcript: ${transcriptWords} words | Summary: ${summaryWords} words | Duration: ${m}:${s.toString().padStart(2, '0')} min`;
@@ -2032,6 +2321,10 @@ export default function TalkToMyself() {
                               
                               // Use the stored recording duration from the red bubble timer
                               const duration = session.recordingDuration || 0;
+                              
+                              if (duration === 0) {
+                                return `${transcriptWords} words | ${summaryWords} words`;
+                              }
                               
                               const m = Math.floor(duration / 60);
                               const s = Math.round(duration % 60);
