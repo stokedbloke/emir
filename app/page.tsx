@@ -33,8 +33,6 @@ import {
   // 🗑️ DEAD CODE: These icons are imported but never used in the UI - can be removed
   CheckCircle,
   Lock,
-  Pause,
-  Play,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/use-toast"
@@ -54,6 +52,7 @@ interface VocalCharacteristics {
 interface EmotionAnalysis {
   emotion: string
   confidence: number
+  sources?: string[] // Optional for backward compatibility
 }
 
 interface SessionData {
@@ -116,12 +115,13 @@ export default function TalkToMyself() {
   const [apiCredits, setApiCredits] = useState<Record<string, string | null>>({})
   const [isCheckingCredits, setIsCheckingCredits] = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
-  const [isPaused, setIsPaused] = useState(false)
+  // Removed isPaused state - simplified to just stop button
   const [utteranceRef, setUtteranceRef] = useState<SpeechSynthesisUtterance | null>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
   // 🗑️ DEAD CODE: These audio analysis refs are created but the audio analysis is never displayed - can be removed
   const audioContextRef = useRef<AudioContext | null>(null)
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const breathingTimerRef = useRef<NodeJS.Timeout | null>(null)
@@ -137,10 +137,10 @@ export default function TalkToMyself() {
   const [actualTTSService, setActualTTSService] = useState<string>("browser");
   const [userId, setUserId] = useState<string>("");
   // 🗑️ DEAD CODE: This counts speech errors but the count isn't displayed - could be simplified to just show/hide the error message
-  const [speechErrorCount, setSpeechErrorCount] = useState(0);
+  // Removed speechErrorCount - no longer penalizing natural speech pauses
   const [speechRecognitionError, setSpeechRecognitionError] = useState<string | null>(null);
   const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
-  const MAX_SPEECH_ERRORS = 10; // Increased tolerance for false positives
+  // Removed MAX_SPEECH_ERRORS - no longer penalizing natural speech pauses
   // 🗑️ DEAD CODE: These voice selection variables are set but never used for actual voice selection - can be removed
   const [selectedElevenLabsVoice, setSelectedElevenLabsVoice] = useState<string>("pNInz6obpgDQGcFmaJgB");
   const [elevenLabsVoices, setElevenLabsVoices] = useState<{id: string, name: string}[]>([]);
@@ -412,6 +412,7 @@ export default function TalkToMyself() {
     // ...rest of your microphone initialization logic that does not require user gesture...
   };
 
+
   const playChime = (type: "start" | "stop") => {
     const audioContext = new AudioContext()
     const oscillator = audioContext.createOscillator()
@@ -446,6 +447,9 @@ export default function TalkToMyself() {
       });
       return
     }
+
+    // Note: Removed explicit permission checks to avoid browser compatibility issues
+    // The existing hasPermission state and audio-capture error handling are sufficient
 
     // Don't delete voice clone when starting new recording - let it persist across sessions
     // Voice clone will only be deleted when user explicitly starts a new session or when handleVoiceClone is called
@@ -493,8 +497,7 @@ export default function TalkToMyself() {
       console.log("MediaRecorder started successfully")
       setIsRecording(true)
       isRecordingRef.current = true
-      // Reset speech error count when starting a new recording
-      setSpeechErrorCount(0)
+      // Reset speech recognition error when starting a new recording
       setSpeechRecognitionError(null)
       playChime("start")
     } catch (err) {
@@ -533,6 +536,7 @@ export default function TalkToMyself() {
       }
 
       setIsRecording(false)
+      setIsProcessing(true) // Set processing state immediately to prevent UI flash
       isRecordingRef.current = false
       playChime("stop")
 
@@ -563,7 +567,6 @@ export default function TalkToMyself() {
     ;(window as any).lastRecognitionTranscript = ""
 
     recognitionRef.current.onresult = (event: any) => {
-      setSpeechErrorCount(0);
       setSpeechRecognitionError(null);
       if (!isRecordingRef.current) return;
 
@@ -598,27 +601,24 @@ export default function TalkToMyself() {
 
     recognitionRef.current.onerror = (event: any) => {
       console.error("Speech recognition error:", event.error, event);
-      if (event.error === "no-speech") {
-        // Only count no-speech errors if we're actually recording
-        // This prevents false positives during normal speech pauses
-        if (isRecording) {
-          setSpeechErrorCount((count) => {
-            const newCount = count + 1;
-            // Only show error after many consecutive no-speech events
-            // This allows for natural pauses in speech
-            if (newCount >= MAX_SPEECH_ERRORS) {
-              setSpeechRecognitionError("No speech detected. Please check your microphone and try again.");
-              toast({
-                title: "No speech detected",
-                description: "We couldn't hear anything. Please check your microphone and try again.",
-                variant: "destructive",
-              });
-              stopRecording();
-            }
-            return newCount;
-          });
-        }
+      
+      if (event.error === "audio-capture") {
+        // Audio capture error - microphone access issue
+        setSpeechRecognitionError("Microphone access denied. Please check your browser permissions and try again.");
+        toast({
+          title: "Microphone Access Denied",
+          description: "Please allow microphone access in your browser and refresh the page.",
+          variant: "destructive",
+        });
+        stopRecording();
+      } else if (event.error === "no-speech") {
+        // Ignore no-speech errors completely - silence is natural in speech
+        // Users pause to think, breathe, or structure thoughts
+        // Vocal characteristics (pace, volume) already capture speech patterns
+        console.log("No-speech event (ignored):", event);
+        // Do nothing - let users speak naturally without interruption
       } else {
+        // Other speech recognition errors
         setSpeechRecognitionError(`Speech recognition error: ${event.error}`);
         toast({
           title: "Speech recognition error",
@@ -740,7 +740,7 @@ export default function TalkToMyself() {
   };
 
   const processAudio = async () => {
-    setIsProcessing(true)
+    // setIsProcessing(true) is now set in stopRecording to prevent UI flash
     setProgress(0)
 
     try {
@@ -802,7 +802,7 @@ export default function TalkToMyself() {
       console.log(`Essential processing completed in ${processingTime}ms`);
 
       // Start emotion analysis in background - not needed for immediate user experience
-      const emotionPromise = analyzeEmotions(transcript).catch(console.error);
+      const emotionPromise = analyzeEmotions(transcript, audioBlob).catch(console.error);
 
       console.log("Vocal characteristics:", vocalCharacteristics);
       
@@ -1064,22 +1064,34 @@ export default function TalkToMyself() {
     }
   }
 
-  const analyzeEmotions = async (text: string): Promise<EmotionAnalysis[]> => {
+  const analyzeEmotions = async (text: string, audioBlob?: Blob): Promise<EmotionAnalysis[]> => {
     try {
-      const response = await fetch("/api/emotions", {
+      // Convert audio blob to base64 for the API
+      let audioBase64 = null;
+      if (audioBlob) {
+        audioBase64 = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.readAsDataURL(audioBlob);
+        });
+      }
+
+      const response = await fetch("/api/emotions-hybrid", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           text,
+          audioBlob: audioBase64,
         }),
       })
 
       if (response.ok) {
         const data = await response.json()
+        console.log("Hybrid emotion analysis result:", data);
         return data.emotions
       }
     } catch (error) {
-      console.error("Emotion analysis error:", error)
+      console.error("Hybrid emotion analysis error:", error)
     }
 
     // Fallback emotions
@@ -1194,7 +1206,7 @@ export default function TalkToMyself() {
         // This ensures we maintain only one voice clone per user
         if (hasVoiceClone && userVoiceCloneId) {
           formData.append('voiceId', userVoiceCloneId);
-          console.log('Improving existing voice clone:', userVoiceCloneId);
+          console.log('Replacing existing voice clone:', userVoiceCloneId);
           
           const response = await fetch('/api/voice-clone/improve', {
             method: 'POST',
@@ -1284,21 +1296,26 @@ export default function TalkToMyself() {
 
     const playAudioBlob = (blob: Blob) => {
       // Stop any existing audio first
-      const existingAudio = document.querySelector('audio');
-      if (existingAudio) {
-        existingAudio.pause();
-        existingAudio.remove();
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause();
+        currentAudioRef.current.remove();
+        currentAudioRef.current = null;
       }
       
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
       
+      // Store reference to current audio
+      currentAudioRef.current = audio;
+      
       audio.onended = () => {
         URL.revokeObjectURL(url);
+        currentAudioRef.current = null;
         setIsSpeaking(false);
       };
       audio.onerror = () => {
         URL.revokeObjectURL(url);
+        currentAudioRef.current = null;
         setIsSpeaking(false);
       };
       
@@ -1374,20 +1391,28 @@ export default function TalkToMyself() {
     }
   };
 
-  const pauseResumeSpeech = () => {
-    if (speechSynthesis.speaking && !speechSynthesis.paused) {
-      speechSynthesis.pause()
-      setIsPaused(true)
-    } else if (speechSynthesis.paused) {
-      speechSynthesis.resume()
-      setIsPaused(false)
-    }
-  }
+  // Removed pauseResumeSpeech - simplified to just stop button
 
   const stopSpeech = () => {
+    // Stop browser speech synthesis
     speechSynthesis.cancel()
+    
+    // Stop current audio element (ElevenLabs TTS)
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current.remove();
+      currentAudioRef.current = null;
+    }
+    
+    // Also stop any other audio elements as backup
+    const existingAudio = document.querySelector('audio');
+    if (existingAudio) {
+      existingAudio.pause();
+      existingAudio.remove();
+    }
+    
+    // Reset state
     setIsSpeaking(false)
-    setIsPaused(false)
     setUtteranceRef(null)
   }
 
@@ -1993,7 +2018,6 @@ export default function TalkToMyself() {
                             }
                             // Reset speaking state
                             setIsSpeaking(false);
-                            setIsPaused(false);
                             // Start new speech
                             speakSummary(currentSession.summary);
                           }}
@@ -2069,26 +2093,6 @@ export default function TalkToMyself() {
                         {isSpeaking && (
                           <Button
                             variant="outline"
-                            onClick={pauseResumeSpeech}
-                            className="flex items-center space-x-2 bg-white/80 border-orange-200 hover:bg-orange-50 rounded-xl px-6 py-3"
-                          >
-                            {isPaused ? (
-                              <>
-                                <Play className="w-5 h-5 text-orange-600" />
-                                <span className="text-orange-600 font-medium">Resume</span>
-                              </>
-                            ) : (
-                              <>
-                                <Pause className="w-5 h-5 text-orange-600" />
-                                <span className="text-orange-600 font-medium">Pause</span>
-                              </>
-                            )}
-                          </Button>
-                        )}
-
-                        {isSpeaking && (
-                          <Button
-                            variant="outline"
                             onClick={stopSpeech}
                             className="flex items-center space-x-2 bg-white/80 border-red-200 hover:bg-red-50 rounded-xl px-6 py-3"
                           >
@@ -2151,32 +2155,142 @@ export default function TalkToMyself() {
                       </CardTitle>
                       <CardDescription className="text-gray-600 text-lg">
                         {serviceStatus.huggingface
-                          ? "AI-powered emotion analysis using Hugging Face models"
+                          ? "Hybrid emotion analysis combining text and audio models for maximum accuracy"
                           : <span className="text-orange-600 font-semibold">(Demo) Fallback emotion analysis – not real AI, for demonstration only</span>}
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="p-8">
+                      {/* Source Legend */}
+                      <div className="mb-6 p-4 bg-gradient-to-r from-gray-50 to-blue-50 rounded-xl border border-gray-200">
+                        <h4 className="text-sm font-semibold text-gray-700 mb-3">Analysis Sources:</h4>
+                        <div className="flex flex-wrap gap-4 text-xs">
+                          <div className="flex items-center space-x-2">
+                            <Badge variant="secondary" className="bg-green-100 text-green-700 border-green-200">
+                              <div className="flex items-center space-x-1">
+                                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                                <span>Hybrid</span>
+                              </div>
+                            </Badge>
+                            <span className="text-gray-600">Both text & audio analysis</span>
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <Badge variant="secondary" className="bg-blue-100 text-blue-700 border-blue-200">
+                              <div className="flex items-center space-x-1">
+                                <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                                <span>Text</span>
+                              </div>
+                            </Badge>
+                            <span className="text-gray-600">Word meaning analysis</span>
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <Badge variant="secondary" className="bg-orange-100 text-orange-700 border-orange-200">
+                              <div className="flex items-center space-x-1">
+                                <div className="w-2 h-2 bg-orange-500 rounded-full"></div>
+                                <span>Audio</span>
+                              </div>
+                            </Badge>
+                            <span className="text-gray-600">Voice tone analysis</span>
+                          </div>
+                        </div>
+                      </div>
                       {currentSession.emotions && currentSession.emotions.length > 0 ? (
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                          {currentSession.emotions.map((emotion, index) => (
-                          <div
-                            key={index}
-                            className="bg-gradient-to-br from-purple-50 via-pink-50 to-indigo-50 rounded-2xl p-6 border border-purple-100 hover:shadow-lg transition-all duration-300"
-                          >
-                            <div className="flex items-center justify-between mb-4">
-                              <h3 className="font-semibold text-gray-800 text-lg">{emotion.emotion}</h3>
-                              <Badge variant="secondary" className="bg-purple-100 text-purple-700">
-                                {(emotion.confidence * 100).toFixed(0)}%
-                              </Badge>
-                            </div>
-                            <div className="w-full bg-white/60 rounded-full h-3 overflow-hidden">
+                          {currentSession.emotions.map((emotion, index) => {
+                            // Determine source information
+                            const sources = (emotion as any).sources || ['text']; // Fallback for old data
+                            const isHybrid = sources.includes('text') && sources.includes('audio');
+                            const isTextOnly = sources.includes('text') && !sources.includes('audio');
+                            const isAudioOnly = sources.includes('audio') && !sources.includes('text');
+                            
+                            // Create tooltip content
+                            const getTooltipContent = () => {
+                              if (isHybrid) {
+                                return "This emotion was detected by both text analysis (analyzing your words) and audio analysis (analyzing your voice tone). This cross-referenced result has higher confidence.";
+                              } else if (isTextOnly) {
+                                return "This emotion was detected by text analysis, which analyzes the meaning and sentiment of your spoken words using HuggingFace's RoBERTa model.";
+                              } else if (isAudioOnly) {
+                                return "This emotion was detected by audio analysis, which analyzes your voice tone, pitch, and inflection using HuggingFace's Wav2Vec2 model.";
+                              }
+                              return "Emotion analysis result";
+                            };
+
+                            // Create source badge
+                            const getSourceBadge = () => {
+                              if (isHybrid) {
+                                return (
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Badge variant="secondary" className="bg-green-100 text-green-700 border-green-200">
+                                        <div className="flex items-center space-x-1">
+                                          <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                                          <span>Hybrid</span>
+                                        </div>
+                                      </Badge>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>{getTooltipContent()}</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                );
+                              } else if (isTextOnly) {
+                                return (
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Badge variant="secondary" className="bg-blue-100 text-blue-700 border-blue-200">
+                                        <div className="flex items-center space-x-1">
+                                          <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                                          <span>Text</span>
+                                        </div>
+                                      </Badge>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>{getTooltipContent()}</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                );
+                              } else if (isAudioOnly) {
+                                return (
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Badge variant="secondary" className="bg-orange-100 text-orange-700 border-orange-200">
+                                        <div className="flex items-center space-x-1">
+                                          <div className="w-2 h-2 bg-orange-500 rounded-full"></div>
+                                          <span>Audio</span>
+                                        </div>
+                                      </Badge>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>{getTooltipContent()}</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                );
+                              }
+                              return null;
+                            };
+
+                            return (
                               <div
-                                className="bg-gradient-to-r from-purple-400 to-pink-500 h-3 rounded-full transition-all duration-1000 ease-out"
-                                style={{ width: `${emotion.confidence * 100}%` }}
-                              ></div>
-                            </div>
-                          </div>
-                        ))}
+                                key={index}
+                                className="bg-gradient-to-br from-purple-50 via-pink-50 to-indigo-50 rounded-2xl p-6 border border-purple-100 hover:shadow-lg transition-all duration-300"
+                              >
+                                <div className="flex items-center justify-between mb-4">
+                                  <h3 className="font-semibold text-gray-800 text-lg">{emotion.emotion}</h3>
+                                  <div className="flex items-center space-x-2">
+                                    {getSourceBadge()}
+                                    <Badge variant="secondary" className="bg-purple-100 text-purple-700">
+                                      {(emotion.confidence * 100).toFixed(0)}%
+                                    </Badge>
+                                  </div>
+                                </div>
+                                <div className="w-full bg-white/60 rounded-full h-3 overflow-hidden">
+                                  <div
+                                    className="bg-gradient-to-r from-purple-400 to-pink-500 h-3 rounded-full transition-all duration-1000 ease-out"
+                                    style={{ width: `${emotion.confidence * 100}%` }}
+                                  ></div>
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
                       ) : (
                         <div className="flex flex-col items-center justify-center py-12 text-center">
