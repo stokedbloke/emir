@@ -140,7 +140,7 @@ export default function TalkToMyself() {
   const [speechErrorCount, setSpeechErrorCount] = useState(0);
   const [speechRecognitionError, setSpeechRecognitionError] = useState<string | null>(null);
   const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
-  const MAX_SPEECH_ERRORS = 3;
+  const MAX_SPEECH_ERRORS = 10; // Increased tolerance for false positives
   // 🗑️ DEAD CODE: These voice selection variables are set but never used for actual voice selection - can be removed
   const [selectedElevenLabsVoice, setSelectedElevenLabsVoice] = useState<string>("pNInz6obpgDQGcFmaJgB");
   const [elevenLabsVoices, setElevenLabsVoices] = useState<{id: string, name: string}[]>([]);
@@ -493,6 +493,9 @@ export default function TalkToMyself() {
       console.log("MediaRecorder started successfully")
       setIsRecording(true)
       isRecordingRef.current = true
+      // Reset speech error count when starting a new recording
+      setSpeechErrorCount(0)
+      setSpeechRecognitionError(null)
       playChime("start")
     } catch (err) {
       console.error("Failed to start MediaRecorder:", err)
@@ -596,19 +599,25 @@ export default function TalkToMyself() {
     recognitionRef.current.onerror = (event: any) => {
       console.error("Speech recognition error:", event.error, event);
       if (event.error === "no-speech") {
-        setSpeechErrorCount((count) => {
-          const newCount = count + 1;
-          if (newCount >= MAX_SPEECH_ERRORS) {
-            setSpeechRecognitionError("No speech detected. Please check your microphone and try again.");
-            toast({
-              title: "No speech detected",
-              description: "We couldn't hear anything. Please check your microphone and try again.",
-              variant: "destructive",
-            });
-            stopRecording();
-          }
-          return newCount;
-        });
+        // Only count no-speech errors if we're actually recording
+        // This prevents false positives during normal speech pauses
+        if (isRecording) {
+          setSpeechErrorCount((count) => {
+            const newCount = count + 1;
+            // Only show error after many consecutive no-speech events
+            // This allows for natural pauses in speech
+            if (newCount >= MAX_SPEECH_ERRORS) {
+              setSpeechRecognitionError("No speech detected. Please check your microphone and try again.");
+              toast({
+                title: "No speech detected",
+                description: "We couldn't hear anything. Please check your microphone and try again.",
+                variant: "destructive",
+              });
+              stopRecording();
+            }
+            return newCount;
+          });
+        }
       } else {
         setSpeechRecognitionError(`Speech recognition error: ${event.error}`);
         toast({
