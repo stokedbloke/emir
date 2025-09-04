@@ -735,7 +735,7 @@ export default function TalkToMyself() {
     setProgress(0)
 
     try {
-      setProcessingStage("Transcribing your reflection...")
+      setProcessingStage("Transcribing your audio...")
       setProgress(25)
 
       console.log("Processing audio chunks:", audioChunksRef.current.length)
@@ -779,19 +779,21 @@ export default function TalkToMyself() {
         return;
       }
 
-      setProcessingStage("Analyzing your reflection...")
+      setProcessingStage("Generating your summary...")
       setProgress(50)
 
-      // Process all analysis in parallel for much faster results
-      // This reduces processing time from ~4-6 seconds to ~2-3 seconds
+      // Process only essential analysis in parallel for immediate user experience
+      // Move non-essential analysis (emotions, vocal characteristics) to background
       const startTime = Date.now();
-      const [vocalCharacteristics, summary, emotions] = await Promise.all([
+      const [vocalCharacteristics, summary] = await Promise.all([
         analyzeVocalCharacteristics(audioBlob),
-        generateSummary(transcript),
-        analyzeEmotions(transcript)
+        generateSummary(transcript)
       ]);
       const processingTime = Date.now() - startTime;
-      console.log(`Parallel processing completed in ${processingTime}ms`);
+      console.log(`Essential processing completed in ${processingTime}ms`);
+
+      // Start emotion analysis in background - not needed for immediate user experience
+      const emotionPromise = analyzeEmotions(transcript).catch(console.error);
 
       console.log("Vocal characteristics:", vocalCharacteristics);
       
@@ -818,7 +820,7 @@ export default function TalkToMyself() {
         return;
       }
 
-      setProcessingStage("Preparing your reflection...")
+      setProcessingStage("Ready!")
       setProgress(100)
 
       // Use ONLY the red bubble timer - store the duration directly
@@ -831,7 +833,7 @@ export default function TalkToMyself() {
         timestamp: new Date(), // Just use current time
         transcript,
         summary,
-        emotions,
+        emotions: [], // Will be populated when background analysis completes
         vocalCharacteristics,
         audioBlob,
         // Store the actual duration from the red bubble timer
@@ -854,11 +856,23 @@ export default function TalkToMyself() {
       }
 
 
-      // Save to Supabase in background - don't block user experience
+      // Complete background emotion analysis and save to Supabase
       if (userId) {
-        // Run Supabase save in background without blocking the UI
+        // Run emotion analysis and Supabase save in background without blocking the UI
         (async () => {
           try {
+            // Wait for emotion analysis to complete
+            const emotions = await emotionPromise;
+            console.log("Background emotion analysis completed:", emotions);
+            
+            // Update the current session with emotions
+            if (emotions) {
+              setCurrentSession(prev => prev ? { ...prev, emotions } : null);
+              setSessions(prev => prev.map(session => 
+                session.id === newSession.id ? { ...session, emotions } : session
+              ));
+            }
+            
             const reflectionData = {
               userId,
               transcript,
@@ -877,7 +891,7 @@ export default function TalkToMyself() {
             await saveReflectionToSupabase(reflectionData);
             console.log("Reflection saved to Supabase successfully");
           } catch (err) {
-            console.error("Failed to save reflection to Supabase:", err);
+            console.error("Failed to complete background processing:", err);
           }
         })();
       }
