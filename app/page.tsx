@@ -1845,7 +1845,7 @@ export default function TalkToMyself() {
                       >
                         {isRecording ? (
                           <div className="flex flex-col items-center space-y-2">
-                            <MicOff className="w-16 h-16 text-white" />
+                            <Mic className="w-16 h-16 text-white" />
                             <span className="text-white text-sm font-medium">{formatTime(currentRecordingTimeRef.current)}</span>
                           </div>
                         ) : (

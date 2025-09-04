@@ -18,7 +18,10 @@ export async function POST(request: Request) {
     const huggingfaceApiKey = process.env.HUGGINGFACE_API_KEY
     if (huggingfaceApiKey) {
       try {
-        // Use HuggingFace 27-emotion model
+        // Use HuggingFace 27-emotion model with timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+        
         const response = await fetch("https://api-inference.huggingface.co/models/SamLowe/roberta-base-go_emotions", {
           headers: {
             Authorization: `Bearer ${huggingfaceApiKey}`,
@@ -26,7 +29,10 @@ export async function POST(request: Request) {
           },
           method: "POST",
           body: JSON.stringify({ inputs: text }),
+          signal: controller.signal,
         })
+        
+        clearTimeout(timeoutId);
 
         if (response.ok) {
           const emotions = await response.json()
@@ -53,7 +59,11 @@ export async function POST(request: Request) {
         }
       } catch (error) {
         // Log HuggingFace fetch error
-        console.error("Hugging Face API error:", error)
+        if (error instanceof Error && error.name === 'AbortError') {
+          console.log("HuggingFace API timeout after 10 seconds, using fallback analysis")
+        } else {
+          console.error("Hugging Face API error:", error)
+        }
       }
     }
 
