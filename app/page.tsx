@@ -851,7 +851,11 @@ export default function TalkToMyself() {
 
       setSessions((prev) => [newSession, ...prev])
       setCurrentSession(newSession)
-      setActiveTab("summary")
+      
+      // Switch to summary tab after a brief delay to ensure UI is ready
+      setTimeout(() => {
+        setActiveTab("summary")
+      }, 100)
 
       // Auto-play the summary immediately for fast user experience
       // If TTS is already generating, it will play when ready
@@ -876,10 +880,14 @@ export default function TalkToMyself() {
             
             // Update the current session with emotions
             if (emotions) {
+              console.log("Updating UI with emotions:", emotions);
               setCurrentSession(prev => prev ? { ...prev, emotions } : null);
               setSessions(prev => prev.map(session => 
                 session.id === newSession.id ? { ...session, emotions } : session
               ));
+              
+              // Force a re-render to ensure the analysis tab shows the emotions
+              console.log("Emotions updated in UI, analysis tab should now show data");
             }
             
             const reflectionData = {
@@ -2148,8 +2156,9 @@ export default function TalkToMyself() {
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="p-8">
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                        {currentSession.emotions.map((emotion, index) => (
+                      {currentSession.emotions && currentSession.emotions.length > 0 ? (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                          {currentSession.emotions.map((emotion, index) => (
                           <div
                             key={index}
                             className="bg-gradient-to-br from-purple-50 via-pink-50 to-indigo-50 rounded-2xl p-6 border border-purple-100 hover:shadow-lg transition-all duration-300"
@@ -2168,7 +2177,16 @@ export default function TalkToMyself() {
                             </div>
                           </div>
                         ))}
-                      </div>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col items-center justify-center py-12 text-center">
+                          <div className="w-16 h-16 bg-gradient-to-br from-purple-100 to-pink-100 rounded-full flex items-center justify-center mb-4">
+                            <div className="w-8 h-8 border-2 border-purple-400 border-t-transparent rounded-full animate-spin"></div>
+                          </div>
+                          <h3 className="text-lg font-semibold text-gray-700 mb-2">Analyzing Emotions</h3>
+                          <p className="text-gray-500">Processing your emotional landscape in the background...</p>
+                        </div>
+                      )}
                     </CardContent>
                   </Card>
 
