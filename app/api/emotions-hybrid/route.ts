@@ -150,7 +150,7 @@ async function analyzeAudioEmotions(audioBlob: string) {
     } else {
       console.error("Audio emotion analysis error:", error);
     }
-    return { emotions: getFallbackAudioEmotions(), source: 'audio', fallback: true };
+    return { emotions: [], source: 'audio', fallback: true };
   }
 }
 
@@ -213,22 +213,11 @@ function getFallbackTextEmotions(text: string) {
     emotions.push({ emotion: "Curiosity", confidence: 0.75 });
   }
 
-  if (emotions.length === 0) {
-    emotions.push(
-      { emotion: "Contemplative", confidence: 0.65 },
-      { emotion: "Reflective", confidence: 0.6 },
-      { emotion: "Present", confidence: 0.55 }
-    );
-  }
+  // No fallback emotions - return empty array when analysis fails
+  // This ensures we never lie to users with fake data
 
   return emotions.sort((a, b) => b.confidence - a.confidence).slice(0, 6);
 }
 
-// Fallback audio emotion analysis
-function getFallbackAudioEmotions() {
-  return [
-    { emotion: "Neutral", confidence: 0.5 },
-    { emotion: "Calm", confidence: 0.3 },
-    { emotion: "Focused", confidence: 0.2 }
-  ];
-}
+// No fallback audio emotions - return empty array when analysis fails
+// This ensures we never lie to users with fake data

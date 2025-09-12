@@ -31,3 +31,14 @@ next-env.d.ts
 app/.DS_Store
 app/api/.DS_Store
 components/.DS_Store
+
+# SSL certificates
+*.pem
+*-key.pem
+
+# Backup files
+*.bak
+*.bak-*
+
+# Validation reports
+validation-reports/

@@ -90,16 +90,13 @@ export async function POST(request: Request) {
         vocalEmotion: rms > 0.08 ? "Energetic" : rms > 0.04 ? "Engaged" : "Calm",
       };
     } catch (e) {
-      console.error("DSP analysis failed, using fallback.", e);
-      dspResult = {
-        energy: "Moderate",
-        tone: "Balanced",
-        pace: "Natural",
-        volume: "Moderate",
-        articulation: "Clear",
-        confidence: 0.7,
-        vocalEmotion: "Calm",
-      };
+      console.error("DSP analysis failed:", e);
+      // No fallback data - return null to indicate analysis failed
+      // This ensures we never lie to users with fake data
+      return Response.json({ 
+        error: "Vocal analysis failed",
+        details: e instanceof Error ? e.message : "Unknown error"
+      }, { status: 500 });
     } finally {
       if (audioContext) await audioContext.close();
     }

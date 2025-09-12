@@ -37,36 +37,18 @@ import {
 import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/use-toast"
 import { v4 as uuidv4 } from 'uuid';
-// 🗑️ DEAD CODE: This Supabase client is created but never used - can be removed
 import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import { VocalCharacteristics, EmotionAnalysis, SessionData, GlobalSettings } from "@/types";
+import { API_ENDPOINTS, AUDIO_CONSTANTS, UI_CONSTANTS, DEFAULT_VALUES, SPEECH_TRIGGERS } from "@/constants";
+import { calculateWordCount, formatTime, getDeviceInfo, getBrowserInfo, playChime } from "@/utils";
+import { LoadingStates } from "@/components/LoadingStates";
+import { BackgroundElements } from "@/components/BackgroundElements";
+import { AppHeader } from "@/components/AppHeader";
+import { useSettings } from "@/hooks/useSettings";
+import { useServiceStatus } from "@/hooks/useServiceStatus";
 
-interface VocalCharacteristics {
-  tone: string
-  pace: string
-  pitch: string
-  volume: string
-  confidence: number
-}
 
-interface EmotionAnalysis {
-  emotion: string
-  confidence: number
-  sources?: string[] // Optional for backward compatibility
-}
-
-interface SessionData {
-  id: string
-  timestamp: Date
-  transcript: string
-  summary: string
-  emotions: EmotionAnalysis[]
-  vocalCharacteristics: VocalCharacteristics
-  audioBlob?: Blob
-  recordingDuration?: number
-}
-
-// 🗑️ DEAD CODE: This Supabase client is created but never used - can be removed
 // Initialize Supabase client for browser use. These values are public and safe to expose.
 // Make sure to set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in your .env and Vercel dashboard.
 const supabase = createSupabaseClient(
@@ -74,14 +56,6 @@ const supabase = createSupabaseClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-type GlobalSettings = {
-  summary_service: string;
-  tts_service: string;
-  elevenlabs_voice_id?: string;
-  google_lang?: string;
-  google_gender?: string;
-  hume_voice?: string;
-};
 
 // Add browser detection utilities at the top of the component:
 // 🗑️ DEAD CODE: These browser detection variables are defined but never used - can be removed
@@ -90,31 +64,14 @@ const isFirefox = typeof window !== 'undefined' && navigator.userAgent.toLowerCa
 
 export default function TalkToMyself() {
   // All hooks must be declared here, before any return statement
-  const [hasPermission, setHasPermission] = useState<boolean | null>(null)
+  const [hasPermission, setHasPermission] = useState<boolean | null>(false)
   const [isRecording, setIsRecording] = useState(false)
-  const [isProcessing, setIsProcessing] = useState(false)
-  const [processingStage, setProcessingStage] = useState("")
-  const [progress, setProgress] = useState(0)
-  const [sessions, setSessions] = useState<SessionData[]>([])
-  
-  // Debug sessions state changes
-  useEffect(() => {
-    console.log("Sessions state updated:", sessions.length, "sessions");
-    if (sessions.length > 0) {
-      console.log("First session:", sessions[0]);
-      console.log("Last session:", sessions[sessions.length - 1]);
-    }
-  }, [sessions]);
-  const [currentSession, setCurrentSession] = useState<SessionData | null>(null)
-  const [activeTab, setActiveTab] = useState("record")
   const [isAdmin, setIsAdmin] = useState(false)
   // Removed old local settings - now using global settings only
   // 🗑️ DEAD CODE: This breathing animation is purely cosmetic - can be removed if you want to simplify the UI
-  const [breathingPhase, setBreathingPhase] = useState<"inhale" | "exhale">("inhale")
   // 🗑️ DEAD CODE: This entire API credit system is unused - can be removed
   const [apiCredits, setApiCredits] = useState<Record<string, string | null>>({})
   const [isCheckingCredits, setIsCheckingCredits] = useState(false)
-  const [isSpeaking, setIsSpeaking] = useState(false)
   // Removed isPaused state - simplified to just stop button
   const [utteranceRef, setUtteranceRef] = useState<SpeechSynthesisUtterance | null>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
@@ -129,121 +86,156 @@ export default function TalkToMyself() {
   const isRecordingRef = useRef(false)
   const currentRecordingTimeRef = useRef(0)
   // 🗑️ DEAD CODE: Live transcript is captured but never displayed in the UI - can be removed
-  const [liveTranscript, setLiveTranscript] = useState("");
-  const [showLiveTranscript, setShowLiveTranscript] = useState(true);
   const { toast } = useToast();
   const fullRecognitionTranscriptRef = useRef("");
-  const [serviceStatus, setServiceStatus] = useState({ huggingface: false, google: false });
   const [actualTTSService, setActualTTSService] = useState<string>("browser");
   const [userId, setUserId] = useState<string>("");
+  
+  // Sessions state management - reverted from useSessions hook for simplicity
+  const [sessions, setSessions] = useState<SessionData[]>([]);
+  const [currentSession, setCurrentSession] = useState<SessionData | null>(null);
+
+  // Fetch reflections from API route for the current user
+  const fetchReflections = async (userId: string) => {
+    if (!userId) return [];
+    try {
+      console.log("Fetching reflections for user:", userId);
+      const res = await fetch(API_ENDPOINTS.REFLECTION, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      });
+
+      console.log("Fetch response status:", res.status);
+
+      if (!res.ok) {
+        console.error("Failed to fetch reflections:", res.status, res.statusText);
+        toast({
+          title: "Error",
+          description: "Failed to fetch reflection history",
+          variant: "destructive",
+        });
+        return [];
+      }
+
+      const data = await res.json();
+      console.log("Raw reflection data from API:", data);
+
+      // Map DB rows to SessionData shape
+      const mappedSessions = (data.reflections || []).map((row: any) => {
+        console.log("Mapping row:", row);
+        return {
+          id: row.id,
+          timestamp: new Date(row.created_at),
+          transcript: row.transcript,
+          summary: row.summary,
+          emotions: row.emotions || [],
+          vocalCharacteristics: row.vocal || {},
+          audioBlob: undefined, // Not stored in DB
+          recordingDuration: (() => {
+            // New format: duration stored in device_info.recording_duration_seconds
+            if (row.device_info && typeof row.device_info === 'object' && row.device_info.recording_duration_seconds) {
+              return row.device_info.recording_duration_seconds;
+            }
+            // Fallback: return 0 for old records without duration
+            return 0;
+          })(),
+        };
+      });
+
+      console.log("Mapped sessions:", mappedSessions);
+      return mappedSessions;
+    } catch (err) {
+      console.error("Error fetching reflections:", err);
+      toast({
+        title: "Error",
+        description: "Failed to fetch reflection history",
+        variant: "destructive",
+      });
+      return [];
+    }
+  };
+
+  // Save reflection to Supabase
+  const saveReflectionToSupabase = async (reflection: any) => {
+    try {
+      console.log("Attempting to save reflection to Supabase:", reflection);
+      const res = await fetch(API_ENDPOINTS.REFLECTION, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(reflection),
+      });
+
+      const responseData = await res.json();
+      console.log("Supabase save response:", responseData);
+
+        if (!res.ok) {
+        console.error("Failed to save reflection:", res.status, res.statusText);
+        toast({
+          title: "Error",
+          description: "Failed to save reflection",
+          variant: "destructive",
+        });
+      } else {
+        console.log("Successfully saved reflection to Supabase");
+        // Re-fetch history after successful save
+        if (userId) {
+          console.log("Re-fetching reflections for user:", userId);
+          const updatedSessions = await fetchReflections(userId);
+          console.log("Updated sessions:", updatedSessions);
+          setSessions(updatedSessions);
+        }
+      }
+    } catch (err) {
+      console.error("Error saving reflection:", err);
+      toast({
+        title: "Error",
+        description: "Failed to save reflection",
+        variant: "destructive",
+      });
+    }
+  };
+  
   // 🗑️ DEAD CODE: This counts speech errors but the count isn't displayed - could be simplified to just show/hide the error message
   // Removed speechErrorCount - no longer penalizing natural speech pauses
   const [speechRecognitionError, setSpeechRecognitionError] = useState<string | null>(null);
   const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
   // Removed MAX_SPEECH_ERRORS - no longer penalizing natural speech pauses
   // 🗑️ DEAD CODE: These voice selection variables are set but never used for actual voice selection - can be removed
-  const [selectedElevenLabsVoice, setSelectedElevenLabsVoice] = useState<string>("pNInz6obpgDQGcFmaJgB");
+  const [selectedElevenLabsVoice, setSelectedElevenLabsVoice] = useState<string>(DEFAULT_VALUES.ELEVENLABS_VOICE_ID);
   const [elevenLabsVoices, setElevenLabsVoices] = useState<{id: string, name: string}[]>([]);
   const [selectedGoogleLang, setSelectedGoogleLang] = useState<string>("en-US");
   const [selectedGoogleGender, setSelectedGoogleGender] = useState<string>("FEMALE");
   const [selectedHumeVoice, setSelectedHumeVoice] = useState<string>("ITO");
+  
+  // Use settings hook
+  const { globalSettings, globalSettingsLoading, globalSettingsError, handleGlobalSettingsChange, setGlobalSettings } = useSettings();
+  const { serviceStatus, setServiceStatus } = useServiceStatus();
+  // UI state management - reverted from useUIState hook for better debugging
+  const [activeTab, setActiveTab] = useState("record");
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [processingStage, setProcessingStage] = useState("");
+  const [progress, setProgress] = useState(0);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isAudioReady, setIsAudioReady] = useState(false);
+  const [breathingPhase, setBreathingPhase] = useState<"inhale" | "exhale">("inhale");
+  const [liveTranscript, setLiveTranscript] = useState("");
+  const [showLiveTranscript, setShowLiveTranscript] = useState(true);
   const [microphoneError, setMicrophoneError] = useState<string | null>(null);
   const [isRequestingMic, setIsRequestingMic] = useState(false);
-  const [globalSettings, setGlobalSettings] = useState<GlobalSettings | null>(null);
-  const [globalSettingsLoading, setGlobalSettingsLoading] = useState(true);
-  const [globalSettingsError, setGlobalSettingsError] = useState<string | null>(null);
+  const [isCloningVoice, setIsCloningVoice] = useState(false);
+  const [hasRequestedVoiceClone, setHasRequestedVoiceClone] = useState(false);
+  const [voiceCloneError, setVoiceCloneError] = useState<string | null>(null);
   
   // Voice clone state management
   const [userVoiceCloneId, setUserVoiceCloneId] = useState<string | null>(null);
-  const [isCloningVoice, setIsCloningVoice] = useState(false);
   const [hasVoiceClone, setHasVoiceClone] = useState(false);
-  const [hasRequestedVoiceClone, setHasRequestedVoiceClone] = useState(false);
 
   // Helper function to calculate exact word counts
-  const calculateWordCount = (text: string) => {
-    if (!text) return 0;
-    return text.trim().split(/\s+/).length;
-  };
 
-  // Function to collect device and browser information
-  const getDeviceInfo = () => {
-    if (typeof window === 'undefined') return null;
-    
-    return {
-      userAgent: navigator.userAgent,
-      platform: navigator.platform,
-      language: navigator.language,
-      cookieEnabled: navigator.cookieEnabled,
-      onLine: navigator.onLine,
-      screenWidth: screen.width,
-      screenHeight: screen.height,
-      windowWidth: window.innerWidth,
-      windowHeight: window.innerHeight,
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      timestamp: new Date().toISOString(),
-    };
-  };
 
-  // Function to get browser-specific info
-  const getBrowserInfo = () => {
-    if (typeof window === 'undefined') return null;
-    
-    const userAgent = navigator.userAgent;
-    let browser = 'Unknown';
-    let version = 'Unknown';
-    
-    if (userAgent.includes('Chrome')) {
-      browser = 'Chrome';
-      version = userAgent.match(/Chrome\/(\d+)/)?.[1] || 'Unknown';
-    } else if (userAgent.includes('Firefox')) {
-      browser = 'Firefox';
-      version = userAgent.match(/Firefox\/(\d+)/)?.[1] || 'Unknown';
-    } else if (userAgent.includes('Safari') && !userAgent.includes('Chrome')) {
-      browser = 'Safari';
-      version = userAgent.match(/Version\/(\d+)/)?.[1] || 'Unknown';
-    } else if (userAgent.includes('Edge')) {
-      browser = 'Edge';
-      version = userAgent.match(/Edge\/(\d+)/)?.[1] || 'Unknown';
-    }
-    
-    return {
-      browser,
-      version,
-      userAgent: userAgent,
-      isMobile: /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(userAgent),
-      isTablet: /iPad|Android(?=.*\bMobile\b)(?=.*\bSafari\b)/i.test(userAgent),
-    };
-  };
 
-  useEffect(() => {
-    setGlobalSettingsLoading(true);
-    setGlobalSettingsError(null);
-    
-    fetch('/api/global-settings')
-      .then(res => {
-        if (!res.ok) {
-          throw new Error(`Failed to load settings: ${res.status}`);
-        }
-        return res.json();
-      })
-      .then(data => {
-        if (data.error) {
-          throw new Error(data.error);
-        }
-        setGlobalSettings(data.settings as GlobalSettings);
-        // Initialize actualTTSService based on global settings
-        if (data.settings?.tts_service) {
-          setActualTTSService(data.settings.tts_service);
-        }
-        setGlobalSettingsLoading(false);
-      })
-      .catch((error) => {
-        console.error('Failed to load global settings:', error);
-        setGlobalSettingsError(error.message);
-        setGlobalSettingsLoading(false);
-        // Don't set globalSettings to null - keep previous settings if available
-      });
-  }, []);
+  // Settings loading is now handled by useSettings hook
 
   // Update actualTTSService when globalSettings changes
   useEffect(() => {
@@ -266,8 +258,8 @@ export default function TalkToMyself() {
   // Load voice clone state from localStorage
   useEffect(() => {
     if (userId) {
-      const storedVoiceId = localStorage.getItem(`em-voice-clone-${userId}`);
-      console.log('Loading voice clone state:', { userId, storedVoiceId });
+      const storedVoiceId = localStorage.getItem(`${DEFAULT_VALUES.USER_VOICE_CLONE_PREFIX}${userId}`);
+      console.log('Loading voice clone state:', { userId, storedVoiceId, isMobile: /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) });
       if (storedVoiceId) {
         setUserVoiceCloneId(storedVoiceId);
         setHasVoiceClone(true);
@@ -276,19 +268,22 @@ export default function TalkToMyself() {
     }
   }, [userId]);
 
-  useEffect(() => {
-    fetch('/api/status')
-      .then(res => res.json())
-      .then(setServiceStatus)
-      .catch(() => setServiceStatus({ huggingface: false, google: false }));
-  }, []);
 
   // Removed old settings saving - now using global settings only
 
-  // Check microphone permission on mount
+  // Simplified permission check - just set to false initially
+  // User will request permission when they try to record
   useEffect(() => {
-    checkMicrophonePermission()
+    console.log("App initialized - microphone permission will be requested when needed");
   }, [])
+
+  // Fetch reflections when userId changes
+  useEffect(() => {
+    if (userId) {
+      console.log("Initial fetch of reflections for user:", userId);
+      fetchReflections(userId).then(setSessions);
+    }
+  }, [userId]);
 
   // Check if user is admin (for development/testing)
   useEffect(() => {
@@ -297,10 +292,10 @@ export default function TalkToMyself() {
     if (typeof window !== "undefined") {
       const urlParams = new URLSearchParams(window.location.search)
       const adminSecret = urlParams.get("admin")
-      const storedAdminSecret = sessionStorage.getItem("admin-secret")
+      const storedAdminSecret = sessionStorage.getItem(DEFAULT_VALUES.ADMIN_SECRET_KEY)
       if (adminSecret === process.env.NEXT_PUBLIC_ADMIN_SECRET || storedAdminSecret === process.env.NEXT_PUBLIC_ADMIN_SECRET) {
         setIsAdmin(true)
-        sessionStorage.setItem("admin-secret", adminSecret || storedAdminSecret || "")
+        sessionStorage.setItem(DEFAULT_VALUES.ADMIN_SECRET_KEY, adminSecret || storedAdminSecret || "")
       }
     }
   }, [])
@@ -322,7 +317,7 @@ export default function TalkToMyself() {
     if (isRecording) {
       breathingTimerRef.current = setInterval(() => {
         setBreathingPhase((prev) => (prev === "inhale" ? "exhale" : "inhale"))
-      }, 3000)
+      }, UI_CONSTANTS.BREATHING_CYCLE_MS)
     } else {
       if (breathingTimerRef.current) {
         clearInterval(breathingTimerRef.current)
@@ -340,38 +335,58 @@ export default function TalkToMyself() {
   // Prevent tab switching during recording or processing
   const canSwitchTab = !isRecording && !isProcessing && !isSpeaking
 
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60)
-    const secs = seconds % 60
-    return `${mins}:${secs.toString().padStart(2, "0")}`
-  }
 
   const checkMicrophonePermission = async () => {
     try {
+      console.log("Querying microphone permission...");
+      
+      // Check if permissions API is supported
+      if (!navigator.permissions || !navigator.permissions.query) {
+        console.log("Permissions API not supported, trying direct microphone access...");
+        await initializeMicrophone();
+        return;
+      }
+      
       const result = await navigator.permissions.query({ name: "microphone" as PermissionName })
+      console.log("Permission result:", result.state);
       if (result.state === "granted") {
+        console.log("Permission granted, initializing microphone...");
         await initializeMicrophone()
       } else {
+        console.log("Permission not granted, setting hasPermission to false");
         setHasPermission(false)
       }
     } catch (error) {
-      setHasPermission(false)
+      console.error("Error querying microphone permission:", error);
+      // If permissions API fails, try direct microphone access
+      console.log("Falling back to direct microphone access...");
+      try {
+        await initializeMicrophone();
+      } catch (micError) {
+        console.error("Direct microphone access also failed:", micError);
+        setHasPermission(false);
+      }
     }
   }
 
   const initializeMicrophone = async () => {
+    console.log("Initializing microphone...");
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      console.log("MediaDevices not supported");
       setMicrophoneError("Microphone access is not supported on this device or browser. Please use the latest version of Safari or Chrome on iOS/Android, or try on desktop.");
+      setHasPermission(false);
       return;
     }
     try {
+      console.log("Requesting microphone access...");
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
-          sampleRate: 48000,
+          sampleRate: AUDIO_CONSTANTS.SAMPLE_RATE,
         },
       })
+      console.log("Microphone access granted, setting up audio context...");
       streamRef.current = stream
       setHasPermission(true)
 
@@ -379,6 +394,7 @@ export default function TalkToMyself() {
       analyserRef.current = audioContextRef.current.createAnalyser()
       const source = audioContextRef.current.createMediaStreamSource(stream)
       source.connect(analyserRef.current)
+      console.log("Microphone initialization complete");
     } catch (error) {
       console.error("Microphone access denied:", error)
       setHasPermission(false)
@@ -386,6 +402,7 @@ export default function TalkToMyself() {
   }
 
   const requestMicrophoneAccess = () => {
+    console.log('requestMicrophoneAccess called, current hasPermission:', hasPermission);
     setIsRequestingMic(true);
     setMicrophoneError(null);
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -395,6 +412,7 @@ export default function TalkToMyself() {
     }
     navigator.mediaDevices.getUserMedia({ audio: true })
       .then((stream: MediaStream) => {
+        console.log('Microphone access granted, setting up stream');
         streamRef.current = stream;
         setHasPermission(true);
         setIsRequestingMic(false);
@@ -402,6 +420,7 @@ export default function TalkToMyself() {
         initializeMicrophoneAfterPermission(stream);
       })
       .catch((err) => {
+        console.error('Microphone access denied:', err);
         setMicrophoneError("Microphone access denied or unavailable. Please check your browser settings and try again.");
         setIsRequestingMic(false);
       });
@@ -413,28 +432,6 @@ export default function TalkToMyself() {
   };
 
 
-  const playChime = (type: "start" | "stop") => {
-    const audioContext = new AudioContext()
-    const oscillator = audioContext.createOscillator()
-    const gainNode = audioContext.createGain()
-
-    oscillator.connect(gainNode)
-    gainNode.connect(audioContext.destination)
-
-    if (type === "start") {
-      oscillator.frequency.setValueAtTime(440, audioContext.currentTime)
-      oscillator.frequency.exponentialRampToValueAtTime(660, audioContext.currentTime + 0.4)
-    } else {
-      oscillator.frequency.setValueAtTime(660, audioContext.currentTime)
-      oscillator.frequency.exponentialRampToValueAtTime(440, audioContext.currentTime + 0.5)
-    }
-
-    gainNode.gain.setValueAtTime(0.1, audioContext.currentTime)
-    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5)
-
-    oscillator.start(audioContext.currentTime)
-    oscillator.stop(audioContext.currentTime + 0.5)
-  }
 
   const startRecording = () => {
     if (!streamRef.current || isSpeaking) return
@@ -469,15 +466,17 @@ export default function TalkToMyself() {
     console.log("Stream tracks:", streamRef.current.getTracks())
     console.log("Audio tracks:", streamRef.current.getAudioTracks())
     
-    let mimeType = 'audio/webm';
+    let mimeType: string = AUDIO_CONSTANTS.MIME_TYPE_FALLBACK;
     if (typeof MediaRecorder !== 'undefined') {
       if (!MediaRecorder.isTypeSupported(mimeType)) {
         // Try Safari-compatible fallback
         mimeType = '';
         console.warn('audio/webm not supported, falling back to default mimeType');
+      } else {
+        console.log('Using fallback MIME type:', mimeType);
       }
     }
-    console.log('Creating MediaRecorder with mimeType:', mimeType);
+    console.log('Creating MediaRecorder with mimeType:', mimeType, 'on mobile:', /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent));
     try {
       const recorder = new MediaRecorder(streamRef.current, mimeType ? { mimeType } : undefined);
       mediaRecorderRef.current = recorder
@@ -590,9 +589,7 @@ export default function TalkToMyself() {
 
       const allTranscript = (fullRecognitionTranscriptRef.current + interimTranscript).toLowerCase().trim();
       // List of trigger phrases
-      const triggers = [
-        "i am complete", "i'm complete"
-      ];
+      const triggers = SPEECH_TRIGGERS;
       // If any trigger phrase is present, stop recording
       if (triggers.some(trigger => allTranscript.endsWith(trigger))) {
         stopRecording();
@@ -605,12 +602,12 @@ export default function TalkToMyself() {
       if (event.error === "audio-capture") {
         // Audio capture error - microphone access issue
         setSpeechRecognitionError("Microphone access denied. Please check your browser permissions and try again.");
-        toast({
+            toast({
           title: "Microphone Access Denied",
           description: "Please allow microphone access in your browser and refresh the page.",
-          variant: "destructive",
-        });
-        stopRecording();
+              variant: "destructive",
+            });
+            stopRecording();
       } else if (event.error === "no-speech") {
         // Ignore no-speech errors completely - silence is natural in speech
         // Users pause to think, breathe, or structure thoughts
@@ -684,7 +681,7 @@ export default function TalkToMyself() {
     }
   }
 
-  const analyzeVocalCharacteristics = async (audioBlob: Blob): Promise<VocalCharacteristics> => {
+  const analyzeVocalCharacteristics = async (audioBlob: Blob): Promise<VocalCharacteristics | null> => {
     try {
       const audioBuffer = await audioBlob.arrayBuffer();
       const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -734,8 +731,9 @@ export default function TalkToMyself() {
         confidence: Math.min(0.95, 0.6 + rms * 2 + speechRatio * 0.3),
       };
     } catch (error) {
-      console.error("Frontend DSP analysis failed, using fallback.", error);
-      return { tone: "Warm", pace: "Natural", pitch: "Balanced", volume: "Moderate", confidence: 0.75 };
+      console.error("Frontend DSP analysis failed:", error);
+      // Return null to indicate analysis failed - no fake data
+      return null;
     }
   };
 
@@ -752,8 +750,13 @@ export default function TalkToMyself() {
       const totalSize = audioChunksRef.current.reduce((sum, chunk) => sum + chunk.size, 0)
       console.log("Total audio size:", totalSize, "bytes")
 
-      const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm;codecs=opus" })
-      console.log("Created audio blob:", audioBlob.size, "bytes")
+      const audioBlob = new Blob(audioChunksRef.current, { type: AUDIO_CONSTANTS.MIME_TYPE })
+      console.log("Created audio blob:", {
+        size: audioBlob.size,
+        type: audioBlob.type,
+        expectedType: AUDIO_CONSTANTS.MIME_TYPE,
+        isMobile: /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+      })
       
       if (!audioBlob || audioBlob.size === 0) {
         console.error("Audio blob is empty!")
@@ -771,9 +774,7 @@ export default function TalkToMyself() {
       let transcript = (await transcribeAudio(audioBlob)).trim();
       
       // Remove trigger phrase from the end of the transcript
-      const triggers = [
-        "i am complete", "i'm complete"
-      ];
+      const triggers = SPEECH_TRIGGERS;
       for (const trigger of triggers) {
         if (transcript.toLowerCase().endsWith(trigger)) {
           transcript = transcript.slice(0, transcript.toLowerCase().lastIndexOf(trigger)).trim();
@@ -805,7 +806,7 @@ export default function TalkToMyself() {
       const emotionPromise = analyzeEmotions(transcript, audioBlob).catch(console.error);
 
       console.log("Vocal characteristics:", vocalCharacteristics);
-      
+
       const trimmedSummary = summary.trim();
       
       // Start TTS generation in parallel while we process the results
@@ -843,7 +844,13 @@ export default function TalkToMyself() {
         transcript,
         summary,
         emotions: [], // Will be populated when background analysis completes
-        vocalCharacteristics,
+        vocalCharacteristics: vocalCharacteristics || {
+          tone: "Unknown",
+          pace: "Unknown", 
+          pitch: "Unknown",
+          volume: "Unknown",
+          confidence: 0
+        },
         audioBlob,
         // Store the actual duration from the red bubble timer
         recordingDuration: recordingDuration,
@@ -854,7 +861,7 @@ export default function TalkToMyself() {
       
       // Switch to summary tab after a brief delay to ensure UI is ready
       setTimeout(() => {
-        setActiveTab("summary")
+      setActiveTab("summary")
       }, 100)
 
       // Auto-play the summary immediately for fast user experience
@@ -890,26 +897,26 @@ export default function TalkToMyself() {
               console.log("Emotions updated in UI, analysis tab should now show data");
             }
             
-            const reflectionData = {
-              userId,
-              transcript,
-              summary,
-              emotions,
-              vocal: vocalCharacteristics,
-              device_info: getDeviceInfo(),
-              browser_info: getBrowserInfo(),
-              location_info: null, // Could add geolocation if needed
-              tts_service_used: actualTTSService,
-              summary_service_used: globalSettings?.summary_service || 'unknown',
-              recording_duration: recordingDuration, // Store the actual duration from red bubble timer
-            };
+          const reflectionData = {
+            userId,
+            transcript,
+            summary,
+            emotions,
+            vocal: vocalCharacteristics,
+            device_info: getDeviceInfo(),
+            browser_info: getBrowserInfo(),
+            location_info: null, // Could add geolocation if needed
+            tts_service_used: actualTTSService,
+            summary_service_used: globalSettings?.summary_service || 'unknown',
+            recording_duration: recordingDuration, // Store the actual duration from red bubble timer
+          };
             console.log("Sending reflection data to Supabase (background):", reflectionData);
-            console.log("Recording duration from red bubble:", recordingDuration, "seconds");
-            await saveReflectionToSupabase(reflectionData);
+          console.log("Recording duration from red bubble:", recordingDuration, "seconds");
+          await saveReflectionToSupabase(reflectionData);
             console.log("Reflection saved to Supabase successfully");
-          } catch (err) {
+        } catch (err) {
             console.error("Failed to complete background processing:", err);
-          }
+        }
         })();
       }
     } catch (error) {
@@ -931,9 +938,9 @@ export default function TalkToMyself() {
 
       try {
         const controller = new AbortController()
-        const timeoutId = setTimeout(() => controller.abort(), 15000)
+        const timeoutId = setTimeout(() => controller.abort(), UI_CONSTANTS.API_TIMEOUT_MS)
 
-        const response = await fetch("/api/transcribe", {
+        const response = await fetch(API_ENDPOINTS.TRANSCRIBE, {
           method: "POST",
           body: formData,
           signal: controller.signal,
@@ -1025,7 +1032,7 @@ export default function TalkToMyself() {
       console.log("Generating summary for transcript:", transcript)
       // Use API (keys are configured on backend)
       console.log('Generating summary with service:', globalSettings?.summary_service);
-      const response = await fetch("/api/summarize", {
+      const response = await fetch(API_ENDPOINTS.SUMMARIZE, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1036,13 +1043,11 @@ export default function TalkToMyself() {
       console.log('Summary API response status:', response.status);
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        console.error('Summary API error:', errorData);
-        toast({
-          title: "Summary failed",
-          description: errorData.error || "Could not generate a summary. Please try again later.",
-          variant: "destructive",
-        });
-        throw new Error("Failed to generate summary");
+        // Don't show invasive error - just log and fallback gracefully
+        console.warn('Summary API failed, using transcript as fallback');
+        const fallbackSummary = transcript ? `I said: "${transcript}"` : "";
+        console.log('Fallback summary generated:', fallbackSummary);
+        return fallbackSummary;
       }
 
       const data = await response.json()
@@ -1052,15 +1057,24 @@ export default function TalkToMyself() {
       if (
         !summary ||
         summary.toLowerCase().startsWith("the themes of") ||
-        summary.toLowerCase().includes("please provide the personal share")
+        summary.toLowerCase().includes("please provide") ||
+        summary.toLowerCase().includes("i need the") ||
+        summary.toLowerCase().includes("original text") ||
+        summary.length < 10 // Too short to be meaningful
       ) {
-        return transcript ? `You said: "${transcript}"` : "";
+        console.warn('Summary appears to be a stub, using transcript as fallback');
+        const fallbackSummary = transcript ? `I said: "${transcript}"` : "";
+        console.log('Fallback summary generated:', fallbackSummary);
+        return fallbackSummary;
       }
 
       return summary;
     } catch (error) {
       // On error, fallback to transcript or nothing
-      return transcript ? `You said: "${transcript}"` : "";
+      console.warn('Summary generation error, using transcript as fallback');
+      const fallbackSummary = transcript ? `I said: "${transcript}"` : "";
+      console.log('Fallback summary generated:', fallbackSummary);
+      return fallbackSummary;
     }
   }
 
@@ -1076,7 +1090,7 @@ export default function TalkToMyself() {
         });
       }
 
-      const response = await fetch("/api/emotions-hybrid", {
+      const response = await fetch(API_ENDPOINTS.EMOTIONS_HYBRID, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1094,12 +1108,9 @@ export default function TalkToMyself() {
       console.error("Hybrid emotion analysis error:", error)
     }
 
-    // Fallback emotions
-    return [
-      { emotion: "Contemplative", confidence: 0.75 },
-      { emotion: "Reflective", confidence: 0.7 },
-      { emotion: "Peaceful", confidence: 0.65 },
-    ]
+    // No fallback emotions - return empty array when analysis fails
+    console.warn("Emotion analysis failed, returning empty emotions array");
+    return []
   }
 
   // console.log("TTS service selected:", settings.voiceService);
@@ -1107,7 +1118,7 @@ export default function TalkToMyself() {
   useEffect(() => {
     const fetchVoices = async () => {
       try {
-        const res = await fetch("/api/voice/elevenlabs/voices");
+        const res = await fetch(API_ENDPOINTS.VOICE_ELEVENLABS_VOICES);
         if (res.ok) {
           const data = await res.json();
           setElevenLabsVoices(data.voices.map((v: any) => ({ id: v.voice_id, name: v.name })));
@@ -1126,7 +1137,7 @@ export default function TalkToMyself() {
     try {
       if (userVoiceCloneId) {
         // Delete voice clone from ElevenLabs
-        await fetch('/api/voice-clone/delete', {
+        await fetch(API_ENDPOINTS.VOICE_CLONE_DELETE, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ voiceId: userVoiceCloneId, userId }),
@@ -1136,7 +1147,7 @@ export default function TalkToMyself() {
         setUserVoiceCloneId(null);
         setHasVoiceClone(false);
         setHasRequestedVoiceClone(false);
-        localStorage.removeItem(`em-voice-clone-${userId}`);
+        localStorage.removeItem(`${DEFAULT_VALUES.USER_VOICE_CLONE_PREFIX}${userId}`);
         
         toast({
           title: "Voice clone deleted",
@@ -1183,6 +1194,7 @@ export default function TalkToMyself() {
       
       setIsCloningVoice(true);
       setHasRequestedVoiceClone(true); // Mark that user wants voice clone
+      setVoiceCloneError(null); // Clear any previous errors
       
       // Show immediate feedback to user
       toast({
@@ -1195,8 +1207,15 @@ export default function TalkToMyself() {
         const audioBlob = new Blob([currentSession.audioBlob], { type: currentSession.audioBlob.type });
         console.log('Fresh audio blob for FormData:', {
           size: audioBlob.size,
-          type: audioBlob.type
+          type: audioBlob.type,
+          originalSize: currentSession.audioBlob.size,
+          originalType: currentSession.audioBlob.type
         });
+        
+        if (audioBlob.size === 0) {
+          setVoiceCloneError('No audio data available. Please try recording again.');
+          return;
+        }
         
         const formData = new FormData();
         formData.append('audio', audioBlob, 'recording.webm');
@@ -1208,7 +1227,7 @@ export default function TalkToMyself() {
           formData.append('voiceId', userVoiceCloneId);
           console.log('Replacing existing voice clone:', userVoiceCloneId);
           
-          const response = await fetch('/api/voice-clone/improve', {
+          const response = await fetch(API_ENDPOINTS.VOICE_CLONE_IMPROVE, {
             method: 'POST',
             body: formData,
           });
@@ -1220,7 +1239,7 @@ export default function TalkToMyself() {
             // Update the voice clone ID (ElevenLabs returns a new ID for improved clones)
             setUserVoiceCloneId(data.voiceId);
             setHasVoiceClone(true);
-            localStorage.setItem(`em-voice-clone-${userId}`, data.voiceId);
+            localStorage.setItem(`${DEFAULT_VALUES.USER_VOICE_CLONE_PREFIX}${userId}`, data.voiceId);
             
             toast({
               title: "Voice clone replaced! 🎉",
@@ -1228,20 +1247,19 @@ export default function TalkToMyself() {
             });
           } else {
             const errorData = await response.json().catch(() => ({}));
-            console.error('Voice clone improvement failed:', errorData);
             throw new Error(errorData.error || 'Failed to improve voice clone');
           }
         } else {
           // Create a new voice clone
-          console.log('Creating new voice clone for audio:', {
-            size: audioBlob.size,
-            type: audioBlob.type
-          });
+        console.log('Creating voice clone for audio:', { size: audioBlob.size, type: audioBlob.type });
           
-          const response = await fetch('/api/voice-clone', {
+          const response = await fetch(API_ENDPOINTS.VOICE_CLONE, {
             method: 'POST',
             body: formData,
           });
+          
+          console.log('Voice clone creation response:', response.status);
+          
           
           if (response.ok) {
             const data = await response.json();
@@ -1249,7 +1267,7 @@ export default function TalkToMyself() {
             
             setUserVoiceCloneId(data.voiceId);
             setHasVoiceClone(true);
-            localStorage.setItem(`em-voice-clone-${userId}`, data.voiceId);
+            localStorage.setItem(`${DEFAULT_VALUES.USER_VOICE_CLONE_PREFIX}${userId}`, data.voiceId);
             
             toast({
               title: "Voice clone created! 🎉",
@@ -1257,19 +1275,25 @@ export default function TalkToMyself() {
             });
           } else {
             const errorData = await response.json().catch(() => ({}));
-            console.error('Voice clone creation failed:', errorData);
-            throw new Error(errorData.error || 'Failed to create voice clone');
+            
+            // Check if it's an API limit error
+            if (response.status === 403 && errorData.detail && errorData.detail.status === 'voice_add_edit_limit_reached') {
+              throw new Error('API_LIMIT_REACHED');
+            }
+            
+            throw new Error(errorData.detail?.message || errorData.error || 'Failed to create voice clone');
           }
         }
         
       } catch (error) {
-        console.error('Voice clone error:', error);
         const errorMessage = error instanceof Error ? error.message : "Please try again or use the default voice.";
-        toast({
-          title: "Voice clone failed",
-          description: errorMessage,
-          variant: "destructive",
-        });
+        
+        // Set error state for UI display instead of invasive toast
+        if (errorMessage === 'API_LIMIT_REACHED') {
+          setVoiceCloneError('Voice clone limit reached. Try again next month or use the default voice.');
+        } else {
+          setVoiceCloneError('Unable to create voice clone. You can still use the default voice.');
+        }
       } finally {
         setIsCloningVoice(false);
       }
@@ -1294,7 +1318,7 @@ export default function TalkToMyself() {
     const ttsService = globalSettings.tts_service;
     // Add any additional settings (voice, lang, etc.) as needed
 
-    const playAudioBlob = (blob: Blob) => {
+    const playAudioBlob = async (blob: Blob) => {
       // Stop any existing audio first
       if (currentAudioRef.current) {
         currentAudioRef.current.pause();
@@ -1310,7 +1334,7 @@ export default function TalkToMyself() {
       
       audio.onended = () => {
         URL.revokeObjectURL(url);
-        currentAudioRef.current = null;
+        // Don't clear currentAudioRef - keep it for replay
         setIsSpeaking(false);
       };
       audio.onerror = () => {
@@ -1319,7 +1343,24 @@ export default function TalkToMyself() {
         setIsSpeaking(false);
       };
       
-      audio.play();
+      // Auto-play on desktop, manual play on mobile
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      
+      if (isMobile) {
+        // Mobile: wait for user interaction
+        console.log('Audio ready for playback - waiting for user interaction');
+        setIsAudioReady(true);
+        setIsSpeaking(false);
+      } else {
+        // Desktop: auto-play
+        console.log('Audio ready for playback - auto-playing on desktop');
+        setIsSpeaking(true);
+        audio.play().catch(err => {
+          console.warn('Auto-play failed, falling back to manual play:', err);
+          setIsAudioReady(true);
+          setIsSpeaking(false);
+        });
+      }
     };
 
     console.log('TTS service selected:', globalSettings?.tts_service);
@@ -1328,38 +1369,60 @@ export default function TalkToMyself() {
       elevenlabs_voice_id: globalSettings?.elevenlabs_voice_id
     });
 
-    // Check if user has a voice clone and use it
+    // Check if user has a voice clone and use it (this should work on both mobile and desktop)
+    console.log('Voice clone check:', { userVoiceCloneId, hasVoiceClone, isMobile: /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) });
     if (userVoiceCloneId && hasVoiceClone) {
       try {
         const payload = { text: summary, voiceId: userVoiceCloneId };
         console.log('Using voice clone for TTS:', payload);
-        const response = await fetch("/api/voice/elevenlabs", {
+        const response = await fetch(API_ENDPOINTS.VOICE_ELEVENLABS, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
         
+        console.log('Voice clone TTS response:', response.status);
+        
+        
         if (response.ok) {
           const audioBlob = await response.blob();
+          console.log('Voice clone TTS response:', {
+            size: audioBlob.size,
+            type: audioBlob.type,
+            status: response.status
+          });
+          
+          if (audioBlob.size === 0) {
+            console.error('Voice clone TTS returned empty audio blob');
+            toast({
+              title: "Voice clone error",
+              description: "The voice clone was created but has no audio data. Please try creating a new voice clone.",
+              variant: "destructive",
+            });
+            return;
+          }
+          
           setActualTTSService("elevenlabs");
-          console.log('Voice clone TTS successful, playing audio');
-          playAudioBlob(audioBlob);
+          console.log('Voice clone TTS successful, playing audio - actualTTSService set to elevenlabs');
+          await playAudioBlob(audioBlob);
           return;
         } else {
           const errorText = await response.text().catch(() => 'Unknown error');
-          console.warn('Voice clone TTS failed:', response.status, errorText);
+          setVoiceCloneError(`Voice clone TTS failed. Using default voice instead.`);
+          return;
         }
       } catch (err) {
-        console.warn('Voice clone TTS failed, falling back to default:', err);
+        setVoiceCloneError(`Voice clone TTS error. Using default voice instead.`);
+        return;
       }
     }
 
     // Fallback to default ElevenLabs voice if configured
     if (globalSettings?.tts_service === 'elevenlabs') {
       try {
-        const payload = { text: summary, voiceId: globalSettings.elevenlabs_voice_id || "pNInz6obpgDQGcFmaJgB" };
+        const payload = { text: summary, voiceId: globalSettings.elevenlabs_voice_id || DEFAULT_VALUES.ELEVENLABS_VOICE_ID };
         console.log('Sending ElevenLabs TTS payload:', payload);
-        const response = await fetch("/api/voice/elevenlabs", {
+        const response = await fetch(API_ENDPOINTS.VOICE_ELEVENLABS, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
@@ -1368,7 +1431,7 @@ export default function TalkToMyself() {
         if (!response.ok) throw new Error("Failed to fetch ElevenLabs audio");
         const audioBlob = await response.blob();
         setActualTTSService("elevenlabs");
-        playAudioBlob(audioBlob);
+        await playAudioBlob(audioBlob);
         return;
       } catch (err) {
         console.warn('Falling back to browser TTS: ElevenLabs TTS error:', err);
@@ -1393,6 +1456,22 @@ export default function TalkToMyself() {
 
   // Removed pauseResumeSpeech - simplified to just stop button
 
+  const playAudio = () => {
+    console.log('playAudio called, currentAudioRef:', !!currentAudioRef.current);
+    if (currentAudioRef.current) {
+      setIsSpeaking(true);
+      // Reset audio to beginning for replay
+      currentAudioRef.current.currentTime = 0;
+      // Don't clear isAudioReady - keep it true so we can replay
+      currentAudioRef.current.play().catch(err => {
+        console.error('Failed to play audio:', err);
+        setIsSpeaking(false);
+      });
+    } else {
+      console.warn('No audio to play - currentAudioRef is null');
+    }
+  };
+
   const stopSpeech = () => {
     // Stop browser speech synthesis
     speechSynthesis.cancel()
@@ -1400,8 +1479,7 @@ export default function TalkToMyself() {
     // Stop current audio element (ElevenLabs TTS)
     if (currentAudioRef.current) {
       currentAudioRef.current.pause();
-      currentAudioRef.current.remove();
-      currentAudioRef.current = null;
+      // Don't remove or clear - keep for replay
     }
     
     // Also stop any other audio elements as backup
@@ -1413,6 +1491,7 @@ export default function TalkToMyself() {
     
     // Reset state
     setIsSpeaking(false)
+    // Don't reset isAudioReady - keep audio ready for replay
     setUtteranceRef(null)
   }
 
@@ -1430,178 +1509,20 @@ export default function TalkToMyself() {
     }
   }, [])
 
-  // Fetch reflections from API route for the current user
-  const fetchReflections = async (userId: string) => {
-    if (!userId) return [];
-    try {
-      console.log("Fetching reflections for user:", userId);
-      const res = await fetch('/api/reflection', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId }),
-      });
-      
-      console.log("Fetch response status:", res.status);
-      
-      if (!res.ok) {
-        console.error("Failed to fetch reflections:", res.status, res.statusText);
-        toast({
-          title: 'Failed to fetch reflection history',
-          description: 'There was a problem fetching your reflection history. Please try again.',
-          variant: 'destructive',
-        });
-        return [];
-      }
-      
-      const data = await res.json();
-      console.log("Raw reflection data from API:", data);
-      
-      // Map DB rows to SessionData shape
-      const mappedSessions = (data.reflections || []).map((row: any) => {
-        console.log("Mapping row:", row);
-        return {
-          id: row.id,
-          timestamp: new Date(row.created_at),
-          transcript: row.transcript,
-          summary: row.summary,
-          emotions: row.emotions || [],
-          vocalCharacteristics: row.vocal || {},
-          audioBlob: undefined, // Not stored in DB
-          recordingDuration: (() => {
-            // New format: duration stored in device_info.recording_duration_seconds
-            if (row.device_info && typeof row.device_info === 'object' && row.device_info.recording_duration_seconds) {
-              return row.device_info.recording_duration_seconds;
-            }
-            // Fallback: return 0 for old records without duration
-            return 0;
-          })(),
-        };
-      });
-      
-      console.log("Mapped sessions:", mappedSessions);
-      return mappedSessions;
-    } catch (err) {
-      console.error("Error fetching reflections:", err);
-      toast({
-        title: 'Failed to fetch reflection history',
-        description: 'There was a problem fetching your reflection history. Please try again.',
-        variant: 'destructive',
-      });
-      return [];
-    }
-  };
-
-  // Fetch on mount and when userId changes
-  useEffect(() => {
-    if (userId) {
-      console.log("Initial fetch of reflections for user:", userId);
-      fetchReflections(userId).then(setSessions);
-    }
-  }, [userId]);
-
-  // After saving a new reflection, re-fetch history
-  const saveReflectionToSupabase = async (reflection: any) => {
-    try {
-      console.log("Attempting to save reflection to Supabase:", reflection);
-      const res = await fetch('/api/reflection', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(reflection),
-      });
-      
-      const responseData = await res.json();
-      console.log("Supabase save response:", responseData);
-      
-      if (!res.ok) {
-        console.error("Failed to save reflection:", res.status, res.statusText);
-        toast({
-          title: 'Failed to save reflection',
-          description: 'There was a problem saving your reflection. Please try again.',
-          variant: 'destructive',
-        });
-      } else {
-        console.log("Successfully saved reflection to Supabase");
-        // Re-fetch history after successful save
-        if (userId) {
-          console.log("Re-fetching reflections for user:", userId);
-          const updatedSessions = await fetchReflections(userId);
-          console.log("Updated sessions:", updatedSessions);
-          setSessions(updatedSessions);
-        }
-      }
-    } catch (err) {
-      console.error("Error saving reflection:", err);
-      toast({
-        title: 'Failed to save reflection',
-        description: 'There was a problem saving your reflection. Please try again.',
-        variant: 'destructive',
-      });
-    }
-  };
 
   // Only after all hooks, handle early returns:
   if (hasPermission === null) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-rose-50 via-purple-50 to-indigo-100 flex items-center justify-center">
-        <div className="text-center space-y-6">
-          <div className="relative">
-            <div className="w-20 h-20 bg-gradient-to-br from-purple-400 to-indigo-500 rounded-full mx-auto animate-pulse"></div>
-            <div className="absolute inset-0 w-20 h-20 bg-gradient-to-br from-purple-400 to-indigo-500 rounded-full mx-auto animate-ping opacity-20"></div>
-          </div>
-          <p className="text-gray-600 font-medium">Preparing your space...</p>
-        </div>
-      </div>
-    )
+    return <LoadingStates isPreparing={true} isLoadingSettings={false} hasSettingsError={false} globalSettingsError={null} />
   }
 
   // Show loading state while global settings are loading
   if (globalSettingsLoading) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-rose-50 via-purple-50 to-indigo-100 flex items-center justify-center">
-        <div className="text-center space-y-6">
-          <div className="relative">
-            <div className="w-20 h-20 bg-gradient-to-br from-blue-400 to-indigo-500 rounded-full mx-auto animate-pulse"></div>
-            <div className="absolute inset-0 w-20 h-20 bg-gradient-to-br from-blue-400 to-indigo-500 rounded-full mx-auto animate-ping opacity-20"></div>
-          </div>
-          <p className="text-gray-600 font-medium">Loading your personalized settings...</p>
-        </div>
-      </div>
-    )
+    return <LoadingStates isPreparing={false} isLoadingSettings={true} hasSettingsError={false} globalSettingsError={null} />
   }
 
   // Show error state if global settings failed to load
   if (globalSettingsError && !globalSettings) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-rose-50 via-purple-50 to-indigo-100 flex items-center justify-center p-6">
-        <Card className="w-full max-w-2xl shadow-2xl border-0 bg-white/90 backdrop-blur-xl">
-          <CardHeader className="text-center pb-8 pt-12">
-            <div className="relative mb-8">
-              <div className="w-16 h-16 bg-gradient-to-br from-red-400 to-red-500 rounded-full mx-auto flex items-center justify-center">
-                <AlertCircle className="w-8 h-8 text-white" />
-              </div>
-            </div>
-            <CardTitle className="text-2xl font-bold text-gray-800 mb-4">
-              Settings Unavailable
-            </CardTitle>
-            <CardDescription className="text-gray-600 text-lg">
-              We're unable to load your personalized settings at the moment.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="text-center space-y-6 pb-12">
-            <p className="text-gray-700">
-              Error: {globalSettingsError}
-            </p>
-            <Button
-              onClick={() => window.location.reload()}
-              size="lg"
-              className="bg-gradient-to-r from-purple-500 to-indigo-600 text-white font-medium px-8 py-3 rounded-xl"
-            >
-              Try Again
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-    )
+    return <LoadingStates isPreparing={false} isLoadingSettings={false} hasSettingsError={true} globalSettingsError={globalSettingsError} />
   }
   if (hasPermission === false) {
     return (
@@ -1649,7 +1570,12 @@ export default function TalkToMyself() {
               </div>
             </div>
             <Button
-              onClick={requestMicrophoneAccess}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                requestMicrophoneAccess();
+              }}
+              type="button"
               size="lg"
               className="bg-gradient-to-r from-purple-500 via-pink-500 to-indigo-600 hover:from-purple-600 hover:via-pink-600 hover:to-indigo-700 text-white font-medium px-12 py-4 rounded-2xl shadow-xl hover:shadow-2xl transition-all duration-300 transform hover:scale-105"
               disabled={isRequestingMic}
@@ -1669,87 +1595,19 @@ export default function TalkToMyself() {
     (sessions.filter(s => s.transcript).length > 0 ? 1 : 0) +
     (isAdmin ? 1 : 0);
 
-  // Move this function here so setGlobalSettings is in scope
-  const handleGlobalSettingsChange = (updates: Record<string, any>) => {
-    fetch('/api/global-settings', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates),
-    })
-      .then(res => res.json())
-      .then(data => {
-        if (data.success) {
-          // Refetch settings to update UI
-          fetch('/api/global-settings')
-            .then(res => res.json())
-            .then(data => setGlobalSettings(data.settings as GlobalSettings));
-        } else {
-          alert(data.error || "Failed to update settings");
-        }
-      });
-  };
+  // handleGlobalSettingsChange is now provided by useSettings hook
 
   return (
     <TooltipProvider>
       <div className="min-h-screen bg-gradient-to-br from-rose-50 via-purple-50 to-indigo-100">
-        {/* Ambient background elements */}
-        <div className="fixed inset-0 overflow-hidden pointer-events-none">
-          <div className="absolute top-1/4 left-1/4 w-64 h-64 bg-purple-200 rounded-full mix-blend-multiply filter blur-xl opacity-30 animate-pulse"></div>
-          <div
-            className="absolute top-3/4 right-1/4 w-64 h-64 bg-pink-200 rounded-full mix-blend-multiply filter blur-xl opacity-30 animate-pulse"
-            style={{ animationDelay: "2s" }}
-          ></div>
-          <div
-            className="absolute bottom-1/4 left-1/2 w-64 h-64 bg-indigo-200 rounded-full mix-blend-multiply filter blur-xl opacity-30 animate-pulse"
-            style={{ animationDelay: "4s" }}
-          ></div>
-        </div>
+        <BackgroundElements />
 
-        {/* Header */}
-        <div className="relative bg-white/60 backdrop-blur-xl border-b border-white/30 sticky top-0 z-50">
-          <div className="max-w-7xl mx-auto px-6 py-6">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-4">
-                <div className="relative">
-                  <div className="w-12 h-12 bg-gradient-to-br from-purple-500 via-pink-500 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg">
-                    <Heart className="w-6 h-6 text-white" />
-                  </div>
-                  <div className="absolute -top-1 -right-1 w-4 h-4 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-full flex items-center justify-center">
-                    <Sparkles className="w-2 h-2 text-white" />
-                  </div>
-                </div>
-                <div>
-                  <h1 className="text-2xl font-bold bg-gradient-to-r from-purple-600 to-indigo-600 bg-clip-text text-transparent">
-                    Emotional Mirror
-                  </h1>
-                  <p className="text-sm text-gray-600">Reflect with clarity and compassion</p>
-                </div>
-              </div>
-              <div className="flex items-center space-x-3">
-                {(isRecording || isProcessing) && (
-                  <Badge variant="outline" className="bg-orange-50 text-orange-700 border-orange-200 animate-pulse">
-                    {isRecording ? "Listening..." : "Processing..."}
-                  </Badge>
-                )}
-                {sessions.length > 0 && (
-                  <Badge variant="secondary" className="bg-purple-100 text-purple-700 border-purple-200">
-                    {sessions.length} reflection{sessions.length !== 1 ? "s" : ""}
-                  </Badge>
-                )}
-                {serviceStatus.google && (
-                  <Badge variant="secondary" className="bg-green-100 text-green-700 border-green-200">
-                    Google AI Connected
-                  </Badge>
-                )}
-                {serviceStatus.huggingface && (
-                  <Badge variant="secondary" className="bg-blue-100 text-blue-700 border-blue-200">
-                    HuggingFace Connected
-                  </Badge>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
+        <AppHeader 
+          isRecording={isRecording}
+          isProcessing={isProcessing}
+          sessionsCount={sessions.length}
+          serviceStatus={serviceStatus}
+        />
 
         {/* Error Warnings */}
         {speechRecognitionError && (
@@ -1841,7 +1699,7 @@ export default function TalkToMyself() {
                             )}
                           >
                             <History className="w-4 h-4" />
-                            <span>History</span>
+                            <span>Reflections</span>
                           </TabsTrigger>
                         )}
                         {isAdmin && (
@@ -1873,7 +1731,7 @@ export default function TalkToMyself() {
                     <div className="relative">
                       <Button
                         onClick={isRecording ? stopRecording : startRecording}
-                        disabled={isProcessing || isSpeaking}
+                        disabled={isProcessing || isAudioReady}
                         size="lg"
                         className={cn(
                           "w-40 h-40 rounded-full transition-all duration-500 shadow-2xl border-4",
@@ -1915,6 +1773,8 @@ export default function TalkToMyself() {
                             ? "Reflecting on your words..."
                             : isSpeaking
                               ? "Speaking your reflection..."
+                              : isAudioReady
+                                ? "Your reflection is ready to play"
                               : "Ready to listen to your voice"}
                       </h2>
                       <p className="text-lg text-gray-600 leading-relaxed">
@@ -1924,6 +1784,8 @@ export default function TalkToMyself() {
                             ? "I'm using AI to transcribe and hear what you've shared, creating an objective synthesis."
                             : isSpeaking
                               ? "Listen to your personalized reflection. Recording is paused while I'm speaking."
+                              : isAudioReady
+                                ? "Click the Play button to hear your personalized reflection."
                               : "This is your safe space. Click the microphone when you're ready to share your thoughts, feelings, anything you want help remembering or whatever is on your mind."}
                       </p>
                     </div>
@@ -2006,7 +1868,18 @@ export default function TalkToMyself() {
                         <Button
                           variant="outline"
                           onClick={() => {
+                            console.log('Listen button clicked, states:', { isSpeaking, isAudioReady, hasSummary: !!currentSession?.summary });
+                            if (isSpeaking) {
+                              // Stop current audio/speech
+                              console.log('Stopping current speech');
+                              stopSpeech();
+                            } else if (isAudioReady) {
+                              // Play the ready audio
+                              console.log('Playing ready audio');
+                              playAudio();
+                            } else {
                             // Stop any current speech before starting new
+                              console.log('Starting new speech generation');
                             if (speechSynthesis.speaking) {
                               speechSynthesis.cancel();
                             }
@@ -2016,27 +1889,41 @@ export default function TalkToMyself() {
                               existingAudio.pause();
                               existingAudio.remove();
                             }
-                            // Reset speaking state
+                              // Reset speaking state and audio ready state
                             setIsSpeaking(false);
+                              setIsAudioReady(false);
                             // Start new speech
                             speakSummary(currentSession.summary);
+                            }
                           }}
-                          disabled={isSpeaking}
-                          className="flex items-center space-x-2 bg-white/80 border-purple-200 hover:bg-purple-50 rounded-xl px-6 py-3"
+                          disabled={!currentSession?.summary}
+                          className={cn(
+                            "flex items-center space-x-2 rounded-xl px-6 py-3 transition-all duration-300",
+                            isSpeaking 
+                              ? "bg-white/80 border-red-200 hover:bg-red-50" 
+                              : "bg-white/80 border-purple-200 hover:bg-purple-50"
+                          )}
                         >
+                          {isSpeaking ? (
+                            <MicOff className="w-5 h-5 text-red-600" />
+                          ) : (
                           <Volume2 className="w-5 h-5 text-purple-600" />
-                          <span className="text-purple-600 font-medium">
-                            {isSpeaking ? "Playing..." : "Listen"}
+                          )}
+                          <span className={cn(
+                            "font-medium",
+                            isSpeaking ? "text-red-600" : "text-purple-600"
+                          )}>
+                            {isSpeaking ? "Stop" : "Listen"}
                           </span>
                         </Button>
 
                         {/* Voice Clone Toggle */}
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <Button
-                              variant="outline"
+                          <Button
+                            variant="outline"
                               onClick={handleVoiceClone}
-                              disabled={isCloningVoice || isSpeaking}
+                              disabled={isCloningVoice}
                               className={cn(
                                 "flex items-center space-x-2 rounded-xl px-6 py-3 transition-all duration-300",
                                 hasVoiceClone 
@@ -2053,14 +1940,14 @@ export default function TalkToMyself() {
                                 <>
                                   <Mic className="w-5 h-5 text-green-600" />
                                   <span className="text-green-600 font-medium">Replace Voice Clone</span>
-                                </>
-                              ) : (
-                                <>
+                              </>
+                            ) : (
+                              <>
                                   <Mic className="w-5 h-5 text-blue-600" />
                                   <span className="text-blue-600 font-medium">Clone Voice</span>
-                                </>
-                              )}
-                            </Button>
+                              </>
+                            )}
+                          </Button>
                           </TooltipTrigger>
                           <TooltipContent>
                             {hasVoiceClone 
@@ -2069,20 +1956,27 @@ export default function TalkToMyself() {
                             }
                           </TooltipContent>
                         </Tooltip>
+                        
+                        {/* Voice Clone Error Display */}
+                        {voiceCloneError && (
+                          <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-800">
+                            {voiceCloneError}
+                          </div>
+                        )}
 
                         {/* Delete Clone Button - only show when voice clone exists */}
                         {hasVoiceClone && userVoiceCloneId && (
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <Button
-                                variant="outline"
+                          <Button
+                            variant="outline"
                                 onClick={handleDeleteVoiceClone}
-                                disabled={isSpeaking}
-                                className="flex items-center space-x-2 bg-white/80 border-red-200 hover:bg-red-50 rounded-xl px-6 py-3"
-                              >
-                                <MicOff className="w-5 h-5 text-red-600" />
+                                disabled={false}
+                            className="flex items-center space-x-2 bg-white/80 border-red-200 hover:bg-red-50 rounded-xl px-6 py-3"
+                          >
+                            <MicOff className="w-5 h-5 text-red-600" />
                                 <span className="text-red-600 font-medium">Delete Clone</span>
-                              </Button>
+                          </Button>
                             </TooltipTrigger>
                             <TooltipContent>
                               Delete your voice clone and return to using the default voice
@@ -2090,16 +1984,6 @@ export default function TalkToMyself() {
                           </Tooltip>
                         )}
 
-                        {isSpeaking && (
-                          <Button
-                            variant="outline"
-                            onClick={stopSpeech}
-                            className="flex items-center space-x-2 bg-white/80 border-red-200 hover:bg-red-50 rounded-xl px-6 py-3"
-                          >
-                            <MicOff className="w-5 h-5 text-red-600" />
-                            <span className="text-red-600 font-medium">Stop</span>
-                          </Button>
-                        )}
                       </div>
                     </div>
                   </CardHeader>
@@ -2109,6 +1993,11 @@ export default function TalkToMyself() {
                         <div className="absolute -left-6 top-0 w-1 h-full bg-gradient-to-b from-purple-400 to-pink-500 rounded-full"></div>
                         <blockquote className="text-xl text-gray-700 leading-relaxed font-medium italic pl-8">
                           "{currentSession.summary}"
+                          {currentSession.summary?.startsWith("I said:") && (
+                            <span className="text-sm text-gray-400 ml-2" title="Using original transcript as summary">
+                              (original)
+                            </span>
+                          )}
                         </blockquote>
                       </div>
                     </div>
@@ -2124,6 +2013,7 @@ export default function TalkToMyself() {
                       {hasVoiceClone && userVoiceCloneId && (
                         <> - Your Voice Clone</>
                       )}
+                      {/* Debug info - moved to useEffect */}
                       {!hasVoiceClone && globalSettings?.tts_service === "elevenlabs" && elevenLabsVoices.find(v => v.id === globalSettings.elevenlabs_voice_id) && (
                         <> - {elevenLabsVoices.find(v => v.id === globalSettings.elevenlabs_voice_id)?.name}</>
                       )}
@@ -2194,7 +2084,7 @@ export default function TalkToMyself() {
                         </div>
                       </div>
                       {currentSession.emotions && currentSession.emotions.length > 0 ? (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                           {currentSession.emotions.map((emotion, index) => {
                             // Determine source information
                             const sources = (emotion as any).sources || ['text']; // Fallback for old data
@@ -2269,36 +2159,38 @@ export default function TalkToMyself() {
                             };
 
                             return (
-                              <div
-                                key={index}
-                                className="bg-gradient-to-br from-purple-50 via-pink-50 to-indigo-50 rounded-2xl p-6 border border-purple-100 hover:shadow-lg transition-all duration-300"
-                              >
-                                <div className="flex items-center justify-between mb-4">
-                                  <h3 className="font-semibold text-gray-800 text-lg">{emotion.emotion}</h3>
+                          <div
+                            key={index}
+                            className="bg-gradient-to-br from-purple-50 via-pink-50 to-indigo-50 rounded-2xl p-6 border border-purple-100 hover:shadow-lg transition-all duration-300"
+                          >
+                            <div className="flex items-center justify-between mb-4">
+                              <h3 className="font-semibold text-gray-800 text-lg">{emotion.emotion}</h3>
                                   <div className="flex items-center space-x-2">
                                     {getSourceBadge()}
-                                    <Badge variant="secondary" className="bg-purple-100 text-purple-700">
-                                      {(emotion.confidence * 100).toFixed(0)}%
-                                    </Badge>
+                              <Badge variant="secondary" className="bg-purple-100 text-purple-700">
+                                {(emotion.confidence * 100).toFixed(0)}%
+                              </Badge>
                                   </div>
-                                </div>
-                                <div className="w-full bg-white/60 rounded-full h-3 overflow-hidden">
-                                  <div
-                                    className="bg-gradient-to-r from-purple-400 to-pink-500 h-3 rounded-full transition-all duration-1000 ease-out"
-                                    style={{ width: `${emotion.confidence * 100}%` }}
-                                  ></div>
-                                </div>
-                              </div>
+                            </div>
+                            <div className="w-full bg-white/60 rounded-full h-3 overflow-hidden">
+                              <div
+                                className="bg-gradient-to-r from-purple-400 to-pink-500 h-3 rounded-full transition-all duration-1000 ease-out"
+                                style={{ width: `${emotion.confidence * 100}%` }}
+                              ></div>
+                            </div>
+                          </div>
                             );
                           })}
-                        </div>
+                      </div>
                       ) : (
                         <div className="flex flex-col items-center justify-center py-12 text-center">
-                          <div className="w-16 h-16 bg-gradient-to-br from-purple-100 to-pink-100 rounded-full flex items-center justify-center mb-4">
-                            <div className="w-8 h-8 border-2 border-purple-400 border-t-transparent rounded-full animate-spin"></div>
+                          <div className="w-16 h-16 bg-gradient-to-br from-gray-100 to-gray-200 rounded-full flex items-center justify-center mb-4">
+                            <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.172 16.172a4 4 0 015.656 0M9 12h6m-6-4h6m2 5.291A7.962 7.962 0 0112 15c-2.34 0-4.29-1.009-5.824-2.709" />
+                            </svg>
                           </div>
-                          <h3 className="text-lg font-semibold text-gray-700 mb-2">Analyzing Emotions</h3>
-                          <p className="text-gray-500">Processing your emotional landscape in the background...</p>
+                          <h3 className="text-lg font-semibold text-gray-700 mb-2">Emotion Analysis Unavailable</h3>
+                          <p className="text-gray-500">Emotion analysis failed. This could be due to network issues or service limitations.</p>
                         </div>
                       )}
                     </CardContent>
@@ -2318,6 +2210,14 @@ export default function TalkToMyself() {
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="p-8">
+                      {currentSession.vocalCharacteristics.tone === "Unknown" ? (
+                        <div className="text-center py-12">
+                          <div className="text-gray-400 text-lg mb-2">Vocal Analysis Unavailable</div>
+                          <div className="text-gray-500 text-sm">
+                            Audio analysis failed. This could be due to audio quality issues or browser limitations.
+                          </div>
+                        </div>
+                      ) : (
                       <div className="grid grid-cols-2 gap-8">
                         <div className="space-y-6">
                           <div className="flex justify-between items-center p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-100">
@@ -2376,6 +2276,7 @@ export default function TalkToMyself() {
                           </div>
                         </div>
                       </div>
+                      )}
                     </CardContent>
                   </Card>
                 </div>
@@ -2623,11 +2524,11 @@ function ServiceStatusAndTestTools() {
   }, []);
 
   const services = [
-    { key: "openai", label: "OpenAI", endpoint: "/api/summarize", testBody: { transcript: "Test summary", service: "openai" } },
-    { key: "gemini", label: "Gemini", endpoint: "/api/summarize", testBody: { transcript: "Test summary", service: "gemini" } },
-    { key: "claude", label: "Claude", endpoint: "/api/summarize", testBody: { transcript: "Test summary", service: "claude" } },
+    { key: "openai", label: "OpenAI", endpoint: API_ENDPOINTS.SUMMARIZE, testBody: { transcript: "Test summary", service: "openai" } },
+    { key: "gemini", label: "Gemini", endpoint: API_ENDPOINTS.SUMMARIZE, testBody: { transcript: "Test summary", service: "gemini" } },
+    { key: "claude", label: "Claude", endpoint: API_ENDPOINTS.SUMMARIZE, testBody: { transcript: "Test summary", service: "claude" } },
     { key: "huggingface", label: "HuggingFace (Emotions)", endpoint: "/api/emotions", testBody: { text: "I am happy and excited." } },
-    { key: "elevenlabs", label: "ElevenLabs (TTS)", endpoint: "/api/voice/elevenlabs", testBody: { text: "Hello from ElevenLabs!" } },
+    { key: "elevenlabs", label: "ElevenLabs (TTS)", endpoint: API_ENDPOINTS.VOICE_ELEVENLABS, testBody: { text: "Hello from ElevenLabs!" } },
     { key: "hume", label: "Hume (TTS)", endpoint: "/api/voice/hume", testBody: { text: "Hello from Hume!" } },
     { key: "google", label: "Google TTS", endpoint: "/api/voice/google", testBody: { text: "Hello from Google!" } },
   ];

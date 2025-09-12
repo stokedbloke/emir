@@ -119,17 +119,8 @@ export async function POST(request: Request) {
       emotions.push({ emotion: "Connection", confidence: 0.72 })
     }
 
-    // Default emotions if none detected
-    if (emotions.length === 0) {
-      emotions.push(
-        { emotion: "Contemplative", confidence: 0.65 },
-        { emotion: "Reflective", confidence: 0.6 },
-        { emotion: "Present", confidence: 0.55 },
-      )
-    } else {
-      // Add some base reflective emotions
-      emotions.push({ emotion: "Thoughtful", confidence: 0.5 }, { emotion: "Authentic", confidence: 0.48 })
-    }
+    // No fallback emotions - return empty array when analysis fails
+    // This ensures we never lie to users with fake data
 
     // Sort by confidence and take top 6
     const sortedEmotions = emotions.sort((a, b) => b.confidence - a.confidence).slice(0, 6)

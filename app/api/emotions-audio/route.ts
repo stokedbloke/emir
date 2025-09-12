@@ -61,13 +61,10 @@ export async function POST(request: NextRequest) {
         console.error("HuggingFace audio emotion API error:", error);
       }
 
-      // Fallback to basic audio analysis
+      // No fallback emotions - return empty array when analysis fails
+      // This ensures we never lie to users with fake data
       return NextResponse.json({ 
-        emotions: [
-          { emotion: 'Neutral', confidence: 0.5 },
-          { emotion: 'Calm', confidence: 0.3 },
-          { emotion: 'Focused', confidence: 0.2 }
-        ],
+        emotions: [],
         fallback: true
       });
     }

@@ -21,7 +21,24 @@ export async function POST(request: Request) {
     }
 
     // Build the summary prompt
-    const prompt = `Provide a brief paraphrased summary of this personal share. You are a simple and attentive active listener. Do not provide praise, disapproval or commentary of any sort. Capture the main points and feelings expressed. Be specific and avoid generic statements  The summary should make the listener feel heard, without any judgement and wihout any words that event slightly could be received as judgement. The paraphrase should be differnt than the speech provided, and be in first person tense. Paraphrase the text regardless of length, language or speaking style.\n\n${transcript}`
+
+    const prompt = `You are a simple and attentive active listener. 
+                    Rephrase this personal reflection in first person. 
+                    Use "I" statements. 
+                    Do not paraphrase the users share in second or third person. 
+                    Be specific and avoid generic statements.
+                    Aim for a crisp and concise but complete summary that captures all the main points.
+                    Do not add emotions, feelings, or interpretations that are not obvious from the original text.
+                    The summary should make the person feel heard, without any judgement or advice. 
+                    The rephrasing should be different than the original speech but maintain the same meaning and emotional tone.
+                    Paraphrase the text regardless of length, language or speaking/singing style.
+
+    Original: ${transcript}
+    
+    Rephrased reflection:` 
+
+    //const prompt = 'You are a simple and attentive active listener. Provide a brief paraphrased summary of this personal share in first person tense. Do not provide praise, disapproval or commentary of any sort. Use "I" statements throughout. Do not refer to the person in second or third person. Be specific and avoid generic statements. The summary should make the person feel heard, without any words that even slightly could be received as judgement or advice. The rephrasing should be different than the original speech but maintain the same meaning and emotional tone. Always use first person perspective. Paraphrase the text regardless of length, language or speaking/singing style.\n\nOriginal: ${transcript}\n\nRephrased reflection:'
+    //const prompt = `Rephrase this personal reflection in first person, as if the person is speaking about their own thoughts and feelings. Use "I" statements throughout. Do not use "you" or refer to the person in second or third person. Capture the main points and feelings expressed. Be specific and avoid generic statements. The summary should make the person feel heard, without any judgement nor advice. The rephrasing should be different than the original speech but maintain the same meaning and emotional tone. Always use first person perspective.\n\nOriginal: ${transcript}\n\nRephrased reflection:`
 
     // Select LLM model based on requested service
     let model
