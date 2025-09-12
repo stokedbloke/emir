@@ -1393,27 +1393,22 @@ export default function TalkToMyself() {
           });
           
           if (audioBlob.size === 0) {
-            console.error('Voice clone TTS returned empty audio blob');
-            toast({
-              title: "Voice clone error",
-              description: "The voice clone was created but has no audio data. Please try creating a new voice clone.",
-              variant: "destructive",
-            });
+            setVoiceCloneError('Voice clone has no audio data. Using default voice instead.');
+            // Don't return here - fall through to default ElevenLabs or browser TTS
+          } else {
+            setActualTTSService("elevenlabs");
+            console.log('Voice clone TTS successful, playing audio - actualTTSService set to elevenlabs');
+            await playAudioBlob(audioBlob);
             return;
           }
-          
-          setActualTTSService("elevenlabs");
-          console.log('Voice clone TTS successful, playing audio - actualTTSService set to elevenlabs');
-          await playAudioBlob(audioBlob);
-          return;
         } else {
           const errorText = await response.text().catch(() => 'Unknown error');
           setVoiceCloneError(`Voice clone TTS failed. Using default voice instead.`);
-          return;
+          // Don't return here - fall through to default ElevenLabs or browser TTS
         }
       } catch (err) {
         setVoiceCloneError(`Voice clone TTS error. Using default voice instead.`);
-        return;
+        // Don't return here - fall through to default ElevenLabs or browser TTS
       }
     }
 
@@ -1428,13 +1423,19 @@ export default function TalkToMyself() {
           body: JSON.stringify(payload),
         });
         console.log('ElevenLabs API response status:', response.status);
-        if (!response.ok) throw new Error("Failed to fetch ElevenLabs audio");
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => 'Unknown error');
+          console.warn('ElevenLabs TTS failed:', response.status, errorText);
+          throw new Error(`ElevenLabs TTS failed: ${response.status} - ${errorText}`);
+        }
         const audioBlob = await response.blob();
         setActualTTSService("elevenlabs");
+        console.log('ElevenLabs TTS successful - actualTTSService set to elevenlabs');
         await playAudioBlob(audioBlob);
         return;
       } catch (err) {
         console.warn('Falling back to browser TTS: ElevenLabs TTS error:', err);
+        // Don't return here - fall through to browser TTS
       }
     }
     // ...repeat for other services if needed...
@@ -1442,10 +1443,25 @@ export default function TalkToMyself() {
     // Fallback: Browser TTS
     if ("speechSynthesis" in window) {
       setActualTTSService("browser");
+      console.log('Falling back to browser TTS - actualTTSService set to browser');
       const utterance = new SpeechSynthesisUtterance(summary);
       
       utterance.onend = () => setIsSpeaking(false);
       utterance.onerror = () => setIsSpeaking(false);
+      
+      // Use a more natural voice if available
+      const voices = speechSynthesis.getVoices();
+      const preferredVoice = voices.find(voice => 
+        voice.name.includes('River') || 
+        voice.name.includes('Samantha') || 
+        voice.name.includes('Alex') ||
+        voice.name.includes('Google')
+      );
+      
+      if (preferredVoice) {
+        utterance.voice = preferredVoice;
+        console.log('Using preferred voice:', preferredVoice.name);
+      }
       
       window.speechSynthesis.speak(utterance);
     } else {
@@ -1556,13 +1572,13 @@ export default function TalkToMyself() {
               Emotional Mirror
             </CardTitle>
             <CardDescription className="text-xl text-gray-600 max-w-lg mx-auto leading-relaxed">
-              A gentle space for self-reflection, where your thoughts are heard with compassion and understanding
+              A distraction-free space for self-reflection, where talking out your thoughts can help release any grip they may have on you
             </CardDescription>
           </CardHeader>
           <CardContent className="text-center space-y-8 pb-12">
             <div className="space-y-6">
               <p className="text-gray-700 leading-relaxed max-w-md mx-auto">
-                To create your personal sanctuary for reflection, we need to listen to your voice with care and respect.
+                To create your personal, anonymized space for reflection, we need consent to access your microphone.
               </p>
               <div className="flex items-center justify-center space-x-3 text-sm text-gray-500 bg-gray-50 rounded-full px-6 py-3 max-w-sm mx-auto">
                 <Shield className="w-5 h-5 text-green-500" />
@@ -1580,7 +1596,7 @@ export default function TalkToMyself() {
               className="bg-gradient-to-r from-purple-500 via-pink-500 to-indigo-600 hover:from-purple-600 hover:via-pink-600 hover:to-indigo-700 text-white font-medium px-12 py-4 rounded-2xl shadow-xl hover:shadow-2xl transition-all duration-300 transform hover:scale-105"
               disabled={isRequestingMic}
             >
-              {isRequestingMic ? "Requesting Microphone..." : "Begin Your Journey"}
+              {isRequestingMic ? "Requesting Microphone..." : "Free Your Mind"}
             </Button>
           </CardContent>
         </Card>

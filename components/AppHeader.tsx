@@ -37,7 +37,7 @@ export const AppHeader = ({
               <h1 className="text-2xl font-bold bg-gradient-to-r from-purple-600 to-indigo-600 bg-clip-text text-transparent">
                 Emotional Mirror
               </h1>
-              <p className="text-sm text-gray-600">Reflect with clarity and compassion</p>
+              <p className="text-sm text-gray-600">Release your inner monologue</p>
             </div>
           </div>
           <div className="flex items-center space-x-3">
