@@ -35,6 +35,7 @@ components/.DS_Store
 # SSL certificates
 *.pem
 *-key.pem
+ssl/
 
 # Backup files
 *.bak
@@ -42,3 +43,7 @@ components/.DS_Store
 
 # Validation reports
 validation-reports/
+
+# This is a development-only file that shouldn't be in production
+# Vercel Compatibility: Vercel doesn't use custom servers - it uses Next.js serverless functions
+server.js

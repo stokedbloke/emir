@@ -958,7 +958,7 @@ export default function TalkToMyself() {
           if (
             data.transcript &&
             data.transcript.trim() !== "" &&
-            data.transcript !== "I shared my thoughts and reflections in this session."
+            data.transcript !== "I voiced my thoughts and reflections in this session."
           ) {
             setTranscriptionError(null);
             return data.transcript;
@@ -1596,7 +1596,7 @@ export default function TalkToMyself() {
               className="bg-gradient-to-r from-purple-500 via-pink-500 to-indigo-600 hover:from-purple-600 hover:via-pink-600 hover:to-indigo-700 text-white font-medium px-12 py-4 rounded-2xl shadow-xl hover:shadow-2xl transition-all duration-300 transform hover:scale-105"
               disabled={isRequestingMic}
             >
-              {isRequestingMic ? "Requesting Microphone..." : "Free Your Mind"}
+              {isRequestingMic ? "Requesting Microphone..." : "Talk it Out"}
             </Button>
           </CardContent>
         </Card>
@@ -1795,14 +1795,14 @@ export default function TalkToMyself() {
                       </h2>
                       <p className="text-lg text-gray-600 leading-relaxed">
                         {isRecording
-                          ? "Take your time. Breathe deeply. Share whatever feels right. When you're ready to finish, simply say 'I'm complete' or tap the button."
+                          ? "Take your time. Breathe deeply. Voice whatever feels right. When you're ready to finish, simply say 'I'm complete' or tap the button."
                           : isProcessing
-                            ? "I'm using AI to transcribe and hear what you've shared, creating an objective synthesis."
+                            ? "I'm using AI to transcribe and hear what you've voiced, creating an objective synthesis."
                             : isSpeaking
                               ? "Listen to your personalized reflection. Recording is paused while I'm speaking."
                               : isAudioReady
                                 ? "Click the Play button to hear your personalized reflection."
-                              : "This is your safe space. Click the microphone when you're ready to share your thoughts, feelings, anything you want help remembering or whatever is on your mind."}
+                              : "This is your safe space. Click the microphone when you're ready to voice your thoughts, feelings, anything you want help remembering or whatever is on your mind."}
                       </p>
                     </div>
 
@@ -1848,7 +1848,7 @@ export default function TalkToMyself() {
                           <div className="space-y-3">
                             <h3 className="font-semibold text-gray-800">A gentle reminder</h3>
                             <p className="text-gray-600 leading-relaxed">
-                              There's no right or wrong way to use this space. You might share your dreams, process a
+                              There's no right or wrong way to use this space. You might voice your dreams, process a
                               difficult day, explore your feelings, or simply think out loud. Whatever you choose to share
                               will be private and secure.
                             </p>
