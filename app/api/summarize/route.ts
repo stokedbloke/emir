@@ -59,7 +59,7 @@ export async function POST(request: Request) {
           return Response.json({ error: "Google API key not configured" }, { status: 500 })
         }
         const google = createGoogleGenerativeAI({ apiKey: googleApiKey })
-        model = google("gemini-1.5-flash")
+        model = google("gemini-1.5-flash-001")
         break
       default:
         // Use OpenAI (requires OPENAI_API_KEY)
