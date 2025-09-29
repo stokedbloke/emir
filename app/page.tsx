@@ -1147,6 +1147,7 @@ export default function TalkToMyself() {
         setUserVoiceCloneId(null);
         setHasVoiceClone(false);
         setHasRequestedVoiceClone(false);
+        setVoiceCloneError(null); // Clear any error messages
         localStorage.removeItem(`${DEFAULT_VALUES.USER_VOICE_CLONE_PREFIX}${userId}`);
         
         toast({
@@ -1226,6 +1227,7 @@ export default function TalkToMyself() {
         if (hasVoiceClone && userVoiceCloneId) {
           formData.append('voiceId', userVoiceCloneId);
           console.log('Replacing existing voice clone:', userVoiceCloneId);
+          console.log('Current voice clone state:', { hasVoiceClone, userVoiceCloneId });
           
           const response = await fetch(API_ENDPOINTS.VOICE_CLONE_IMPROVE, {
             method: 'POST',
@@ -1251,7 +1253,8 @@ export default function TalkToMyself() {
           }
         } else {
           // Create a new voice clone
-        console.log('Creating voice clone for audio:', { size: audioBlob.size, type: audioBlob.type });
+          console.log('Creating NEW voice clone for audio:', { size: audioBlob.size, type: audioBlob.type });
+          console.log('Current voice clone state:', { hasVoiceClone, userVoiceCloneId });
           
           const response = await fetch(API_ENDPOINTS.VOICE_CLONE, {
             method: 'POST',
@@ -1393,8 +1396,8 @@ export default function TalkToMyself() {
           });
           
           if (audioBlob.size === 0) {
-            setVoiceCloneError('Voice clone has no audio data. Using default voice instead.');
-            // Don't return here - fall through to default ElevenLabs or browser TTS
+            console.warn('Voice clone has no audio data, falling back to default voice');
+            // Don't set error - just fall through silently
           } else {
             setActualTTSService("elevenlabs");
             console.log('Voice clone TTS successful, playing audio - actualTTSService set to elevenlabs');
@@ -1403,12 +1406,12 @@ export default function TalkToMyself() {
           }
         } else {
           const errorText = await response.text().catch(() => 'Unknown error');
-          setVoiceCloneError(`Voice clone TTS failed. Using default voice instead.`);
-          // Don't return here - fall through to default ElevenLabs or browser TTS
+          console.warn('Voice clone TTS failed, falling back to default voice:', errorText);
+          // Don't set error - just fall through silently
         }
       } catch (err) {
-        setVoiceCloneError(`Voice clone TTS error. Using default voice instead.`);
-        // Don't return here - fall through to default ElevenLabs or browser TTS
+        console.warn('Voice clone TTS error, falling back to default voice:', err);
+        // Don't set error - just fall through silently
       }
     }
 
@@ -1973,8 +1976,28 @@ export default function TalkToMyself() {
                           </TooltipContent>
                         </Tooltip>
                         
-                        {/* Voice Clone Error Display */}
-                        {voiceCloneError && (
+                        {/* Voice Clone Status Display */}
+                        {hasVoiceClone && userVoiceCloneId && (
+                          <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded-lg text-sm text-green-800">
+                            <div className="flex items-center justify-between">
+                              <span>Your voice clone is active</span>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span className="text-xs text-green-600 cursor-help underline">
+                                    Voice ID: {userVoiceCloneId.substring(0, 8)}...
+                                  </span>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>Full Voice ID: {userVoiceCloneId}</p>
+                                  <p className="text-xs text-gray-400 mt-1">Check this ID in your ElevenLabs account</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
+                          </div>
+                        )}
+                        
+                        {/* Voice Clone Error Display - only show when there's an actual error */}
+                        {voiceCloneError && !hasVoiceClone && (
                           <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-800">
                             {voiceCloneError}
                           </div>
@@ -2571,6 +2594,28 @@ function ServiceStatusAndTestTools() {
     }
   };
 
+  const handleListModels = async () => {
+    setTestLoading((prev) => ({ ...prev, "gemini-models": true }));
+    setTestResults((prev) => ({ ...prev, "gemini-models": "" }));
+    try {
+      const res = await fetch("/api/gemini/models", {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setTestResults((prev) => ({ ...prev, "gemini-models": JSON.stringify(data, null, 2) }));
+      } else {
+        const errorText = await res.text();
+        setTestResults((prev) => ({ ...prev, "gemini-models": `Error: ${res.status} - ${errorText}` }));
+      }
+    } catch (e: any) {
+      setTestResults((prev) => ({ ...prev, "gemini-models": `Error: ${e.message}` }));
+    } finally {
+      setTestLoading((prev) => ({ ...prev, "gemini-models": false }));
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div>
@@ -2590,18 +2635,35 @@ function ServiceStatusAndTestTools() {
                   </span>
                 )}
                           </div>
-              <button
-                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
-                onClick={() => handleTest(service)}
-                disabled={testLoading[service.key]}
-              >
-                {testLoading[service.key] ? "Testing..." : "Test API"}
-              </button>
+              <div className="space-y-2">
+                <button
+                  className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 w-full"
+                  onClick={() => handleTest(service)}
+                  disabled={testLoading[service.key]}
+                >
+                  {testLoading[service.key] ? "Testing..." : "Test API"}
+                </button>
+                {service.key === "gemini" && (
+                  <button
+                    className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50 w-full"
+                    onClick={handleListModels}
+                    disabled={testLoading["gemini-models"]}
+                  >
+                    {testLoading["gemini-models"] ? "Loading..." : "List Models"}
+                  </button>
+                )}
+              </div>
               {testResults[service.key] && (
                 <div className="mt-2 text-xs text-gray-700 break-all">
                   {testResults[service.key]}
-                          </div>
-                        )}
+                </div>
+              )}
+              {service.key === "gemini" && testResults["gemini-models"] && (
+                <div className="mt-2 text-xs text-gray-700 break-all">
+                  <strong>Available Models:</strong>
+                  <pre className="whitespace-pre-wrap">{testResults["gemini-models"]}</pre>
+                </div>
+              )}
                       </div>
           ))}
                     </div>

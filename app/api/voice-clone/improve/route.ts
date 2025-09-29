@@ -51,7 +51,14 @@ export async function POST(request: NextRequest) {
     if (!deleteResponse.ok) {
       const deleteError = await deleteResponse.text();
       console.error('Failed to delete existing voice clone:', deleteError);
-      return NextResponse.json({ error: 'Failed to delete existing voice clone' }, { status: 500 });
+      
+      // Check if the error is because the voice doesn't exist
+      if (deleteError.includes('voice_does_not_exist') || deleteError.includes('voice_not_found')) {
+        console.log('Voice clone does not exist, proceeding to create new one');
+        // Continue with creating a new voice clone instead of failing
+      } else {
+        return NextResponse.json({ error: 'Failed to delete existing voice clone' }, { status: 500 });
+      }
     }
 
     console.log('Existing voice clone deleted successfully:', voiceId);

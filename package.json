@@ -8,6 +8,7 @@
     "lint": "next lint",
     "start": "next start",
     "test:functional": "node tests/functional-baseline.test.js",
+    "test:api": "NODE_TLS_REJECT_UNAUTHORIZED=0 node tests/api-suite.test.js",
     "test:visual": "node tests/visual-regression.test.js",
     "validate": "node scripts/validate-refactoring.js",
     "compare": "node scripts/compare-changes.js",
