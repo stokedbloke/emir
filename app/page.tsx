@@ -30,6 +30,7 @@ import {
   Heart,
   Waves,
   AlertCircle,
+  Info,
   // 🗑️ DEAD CODE: These icons are imported but never used in the UI - can be removed
   CheckCircle,
   Lock,
@@ -1147,6 +1148,7 @@ export default function TalkToMyself() {
         setUserVoiceCloneId(null);
         setHasVoiceClone(false);
         setHasRequestedVoiceClone(false);
+        setVoiceCloneError(null); // Clear any error messages
         localStorage.removeItem(`${DEFAULT_VALUES.USER_VOICE_CLONE_PREFIX}${userId}`);
         
         toast({
@@ -1226,6 +1228,7 @@ export default function TalkToMyself() {
         if (hasVoiceClone && userVoiceCloneId) {
           formData.append('voiceId', userVoiceCloneId);
           console.log('Replacing existing voice clone:', userVoiceCloneId);
+          console.log('Current voice clone state:', { hasVoiceClone, userVoiceCloneId });
           
           const response = await fetch(API_ENDPOINTS.VOICE_CLONE_IMPROVE, {
             method: 'POST',
@@ -1251,7 +1254,8 @@ export default function TalkToMyself() {
           }
         } else {
           // Create a new voice clone
-        console.log('Creating voice clone for audio:', { size: audioBlob.size, type: audioBlob.type });
+          console.log('Creating NEW voice clone for audio:', { size: audioBlob.size, type: audioBlob.type });
+          console.log('Current voice clone state:', { hasVoiceClone, userVoiceCloneId });
           
           const response = await fetch(API_ENDPOINTS.VOICE_CLONE, {
             method: 'POST',
@@ -1393,8 +1397,8 @@ export default function TalkToMyself() {
           });
           
           if (audioBlob.size === 0) {
-            setVoiceCloneError('Voice clone has no audio data. Using default voice instead.');
-            // Don't return here - fall through to default ElevenLabs or browser TTS
+            console.warn('Voice clone has no audio data, falling back to default voice');
+            // Don't set error - just fall through silently
           } else {
             setActualTTSService("elevenlabs");
             console.log('Voice clone TTS successful, playing audio - actualTTSService set to elevenlabs');
@@ -1403,12 +1407,12 @@ export default function TalkToMyself() {
           }
         } else {
           const errorText = await response.text().catch(() => 'Unknown error');
-          setVoiceCloneError(`Voice clone TTS failed. Using default voice instead.`);
-          // Don't return here - fall through to default ElevenLabs or browser TTS
+          console.warn('Voice clone TTS failed, falling back to default voice:', errorText);
+          // Don't set error - just fall through silently
         }
       } catch (err) {
-        setVoiceCloneError(`Voice clone TTS error. Using default voice instead.`);
-        // Don't return here - fall through to default ElevenLabs or browser TTS
+        console.warn('Voice clone TTS error, falling back to default voice:', err);
+        // Don't set error - just fall through silently
       }
     }
 
@@ -1653,6 +1657,7 @@ export default function TalkToMyself() {
                       1 // Always show "record"
                       + (currentSession ? 3 : 0) // summary, analysis, transcript
                       + (sessions.filter(s => s.transcript).length > 0 ? 1 : 0) // history
+                      + 1 // Always show "about"
                       + (isAdmin ? 1 : 0) // settings
                     ) > 1 && (
                       <>
@@ -1718,6 +1723,17 @@ export default function TalkToMyself() {
                             <span>Reflections</span>
                           </TabsTrigger>
                         )}
+                        <TabsTrigger
+                          value="about"
+                          disabled={!canSwitchTab && activeTab !== "about"}
+                          className={cn(
+                            "flex items-center space-x-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-indigo-600 data-[state=active]:text-white rounded-xl px-6 py-3 transition-all duration-300",
+                            !canSwitchTab && activeTab !== "about" && "opacity-50 cursor-not-allowed",
+                          )}
+                        >
+                          <Info className="w-4 h-4" />
+                          <span>About</span>
+                        </TabsTrigger>
                         {isAdmin && (
                           <TabsTrigger
                             value="settings"
@@ -1973,8 +1989,28 @@ export default function TalkToMyself() {
                           </TooltipContent>
                         </Tooltip>
                         
-                        {/* Voice Clone Error Display */}
-                        {voiceCloneError && (
+                        {/* Voice Clone Status Display */}
+                        {hasVoiceClone && userVoiceCloneId && (
+                          <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded-lg text-sm text-green-800">
+                            <div className="flex items-center justify-between">
+                              <span>Your voice clone is active</span>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span className="text-xs text-green-600 cursor-help underline">
+                                    Voice ID: {userVoiceCloneId.substring(0, 8)}...
+                                  </span>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>Full Voice ID: {userVoiceCloneId}</p>
+                                  <p className="text-xs text-gray-400 mt-1">Check this ID in your ElevenLabs account</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </div>
+                          </div>
+                        )}
+                        
+                        {/* Voice Clone Error Display - only show when there's an actual error */}
+                        {voiceCloneError && !hasVoiceClone && (
                           <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-800">
                             {voiceCloneError}
                           </div>
@@ -2518,6 +2554,92 @@ export default function TalkToMyself() {
               </Card>
             </TabsContent>
             )}
+
+            {/* About Tab */}
+            <TabsContent value="about" className="space-y-8">
+              <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
+                <CardHeader className="bg-gradient-to-r from-purple-50 to-indigo-50 p-8">
+                  <CardTitle className="text-3xl text-gray-800 flex items-center space-x-3">
+                    <div className="w-10 h-10 bg-gradient-to-br from-purple-400 to-indigo-500 rounded-lg flex items-center justify-center flex-shrink-0">
+                      <Info className="w-5 h-5 text-white" />
+                    </div>
+                    <span>About</span>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-8 space-y-8">
+                  {/* Main About Content */}
+                  <div className="prose prose-lg max-w-none text-gray-700 leading-relaxed">
+                    <p className="mb-6">
+                      I'm obsessed with voice. Helping my daughter find hers pushed me to model trusting my own. By speaking before self-censoring kicks in, I can hear what's true for me and gain confidence in organizing my thoughts in real time.
+                    </p>
+                    
+                    <p className="mb-8">
+                      We live in a flood of news, feeds, and opinions. I'm not trying to shut the world out; I'm choosing moments to tune in. Emotional Mirror gives me a protected space to be 100% present with myself, so I can declutter what's already inside; truths, gifts, and realities, and be present in the world with more intention and calm.
+                    </p>
+                  </div>
+
+                  {/* What it is */}
+                  <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-2xl p-6">
+                    <h3 className="text-xl font-semibold text-gray-800 mb-4">What it is</h3>
+                    <p className="text-gray-700 leading-relaxed">
+                      A private, hands-free voice journal that actively listens and reflects my words back without judgment, so scattered threads become clearer and self-trust grows.
+                    </p>
+                  </div>
+
+                  {/* How I use it */}
+                  <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-2xl p-6">
+                    <h3 className="text-xl font-semibold text-gray-800 mb-4">How I use it</h3>
+                    <ul className="space-y-3 text-gray-700">
+                      <li className="flex items-start space-x-3">
+                        <span className="text-green-500 mt-1">•</span>
+                        <span>Quick debriefs after classes, podcasts, or meetings</span>
+                      </li>
+                      <li className="flex items-start space-x-3">
+                        <span className="text-green-500 mt-1">•</span>
+                        <span>Rehearsals for presentations, interviews, or hard conversations</span>
+                      </li>
+                      <li className="flex items-start space-x-3">
+                        <span className="text-green-500 mt-1">•</span>
+                        <span>Checking tone/sentiment over time so intent matches impact</span>
+                      </li>
+                      <li className="flex items-start space-x-3">
+                        <span className="text-green-500 mt-1">•</span>
+                        <span>Offloading rumination to be more present with people I love</span>
+                      </li>
+                    </ul>
+                  </div>
+
+                  {/* What it isn't */}
+                  <div className="bg-gradient-to-r from-orange-50 to-red-50 rounded-2xl p-6">
+                    <h3 className="text-xl font-semibold text-gray-800 mb-4">What it isn't</h3>
+                    <p className="text-gray-700 leading-relaxed">
+                      Therapy, coaching, or a guru. No prescriptions. Just space to hear myself.
+                    </p>
+                  </div>
+
+                  {/* Privacy & control */}
+                  <div className="bg-gradient-to-r from-gray-50 to-slate-50 rounded-2xl p-6">
+                    <h3 className="text-xl font-semibold text-gray-800 mb-4">Privacy & control</h3>
+                    <p className="text-gray-700 leading-relaxed">
+                      No audio is stored. Reflections are disassociated from names and kept anonymous. I can export everything to CSV in one click. Voice clones require explicit consent and are instantly deletable.
+                    </p>
+                  </div>
+
+                  {/* Contact */}
+                  <div className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-2xl p-6 text-center">
+                    <p className="text-gray-700 leading-relaxed">
+                      Share any comments, feedback or hopes via voice or text to{" "}
+                      <a 
+                        href="mailto:hit.neil.up@gmail.com" 
+                        className="text-purple-600 hover:text-purple-800 font-medium underline"
+                      >
+                        hit.neil.up@gmail.com
+                      </a>
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
           </Tabs>
         </div>
       </div>
@@ -2571,6 +2693,28 @@ function ServiceStatusAndTestTools() {
     }
   };
 
+  const handleListModels = async () => {
+    setTestLoading((prev) => ({ ...prev, "gemini-models": true }));
+    setTestResults((prev) => ({ ...prev, "gemini-models": "" }));
+    try {
+      const res = await fetch("/api/gemini/models", {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setTestResults((prev) => ({ ...prev, "gemini-models": JSON.stringify(data, null, 2) }));
+      } else {
+        const errorText = await res.text();
+        setTestResults((prev) => ({ ...prev, "gemini-models": `Error: ${res.status} - ${errorText}` }));
+      }
+    } catch (e: any) {
+      setTestResults((prev) => ({ ...prev, "gemini-models": `Error: ${e.message}` }));
+    } finally {
+      setTestLoading((prev) => ({ ...prev, "gemini-models": false }));
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div>
@@ -2590,18 +2734,35 @@ function ServiceStatusAndTestTools() {
                   </span>
                 )}
                           </div>
-              <button
-                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
-                onClick={() => handleTest(service)}
-                disabled={testLoading[service.key]}
-              >
-                {testLoading[service.key] ? "Testing..." : "Test API"}
-              </button>
+              <div className="space-y-2">
+                <button
+                  className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 w-full"
+                  onClick={() => handleTest(service)}
+                  disabled={testLoading[service.key]}
+                >
+                  {testLoading[service.key] ? "Testing..." : "Test API"}
+                </button>
+                {service.key === "gemini" && (
+                  <button
+                    className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50 w-full"
+                    onClick={handleListModels}
+                    disabled={testLoading["gemini-models"]}
+                  >
+                    {testLoading["gemini-models"] ? "Loading..." : "List Models"}
+                  </button>
+                )}
+              </div>
               {testResults[service.key] && (
                 <div className="mt-2 text-xs text-gray-700 break-all">
                   {testResults[service.key]}
-                          </div>
-                        )}
+                </div>
+              )}
+              {service.key === "gemini" && testResults["gemini-models"] && (
+                <div className="mt-2 text-xs text-gray-700 break-all">
+                  <strong>Available Models:</strong>
+                  <pre className="whitespace-pre-wrap">{testResults["gemini-models"]}</pre>
+                </div>
+              )}
                       </div>
           ))}
                     </div>

@@ -131,6 +131,7 @@ The app now includes an ElevenLabs-powered voice cloning feature that allows use
 - **Immediate Feedback**: Toast notifications for success/failure states
 - **Seamless Integration**: Voice clones automatically used for TTS without additional configuration
 - **Manual Control**: Users can manually delete voice clones when desired
+ - **Voice ID Tooltip**: The "Your voice clone" label shows a tooltip with the full Voice ID (truncated on mobile). Useful for cross‑checking against ElevenLabs.
 
 ### Privacy & Security
 - Audio recordings are processed by ElevenLabs but not permanently stored
@@ -163,11 +164,43 @@ This app uses a global settings table in Supabase to control which summary and T
 ### Security Note
 - The PATCH endpoint should only be accessible to admins. Add authentication/authorization for production use.
 
+## Tests
+
+### API Test Suite
+
+Run the automated API checks against your local HTTPS dev server:
+
+```bash
+npm run test:api
+```
+
+By default this targets `https://localhost:3000`. To point at another environment:
+
+```bash
+TEST_BASE_URL=https://your-env.example.com npm run test:api
+```
+
+What is covered:
+- `/api/status` availability
+- `/api/summarize` first‑person output (Gemini)
+- `/api/gemini/models` model listing
+- `/api/reflection` UUID validation and response shape
+- `/api/voice/elevenlabs` returns audio content
+- `/api/voice-clone/improve` gracefully handles corrupted input
+
+Notes:
+- The test suite uses Node fetch and disables TLS verification for local self‑signed certs.
+- ElevenLabs TTS test validates status and content‑type only; it does not play audio.
+
 ## Git Merge Summary (for PR/commit)
 
-**Title:** Milestone 2 QA: Anonymous User Tracking & Reflection History
+**Title:** Voice cloning reliability, Gemini prompt/model hardening, and API tests
 
 **Description:**
-- Implements and documents Milestone 2: anonymous user tracking, Supabase reflection storage, and history UI.
-- Adds a comprehensive QA checklist for use and edge cases, including those requiring production testing (e.g., user ID persistence across browsers/devices).
-- Prepares the codebase for settings page hardening and LLM fallback in future milestones.
+- Fixes ElevenLabs voice cloning upload path to prevent corrupted audio (use `Buffer.from(..., 'base64')`).
+- Improves voice‑clone deletion handling (continues when voice does not exist).
+- Clarifies TTS fallback: silent fallback to default voice, reduces noisy UI errors.
+- Enforces first‑person summaries with refined Gemini prompt (v4.1) and stable model.
+- Adds `/api/gemini/models` endpoint and Settings UI button for model discovery.
+- Introduces automated API test suite (`npm run test:api`) covering summarize, models, TTS, reflections, and error handling.
+- Updates README with testing instructions.

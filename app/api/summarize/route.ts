@@ -22,20 +22,23 @@ export async function POST(request: Request) {
 
     // Build the summary prompt
 
-    const prompt = `You are a simple and attentive active listener. 
-                    Rephrase this personal reflection in first person. 
-                    Use "I" statements. 
-                    Do not paraphrase the users share in second or third person. 
-                    Be specific and avoid generic statements.
-                    Aim for a crisp and concise but complete summary that captures all the main points.
-                    Do not add emotions, feelings, or interpretations that are not obvious from the original text.
-                    The summary should make the person feel heard, without any judgement or advice. 
-                    The rephrasing should be different than the original speech but maintain the same meaning and emotional tone.
-                    Paraphrase the text regardless of length, language or speaking/singing style.
+    const prompt = `CRITICAL: You must rephrase this personal reflection EXCLUSIVELY in first person using "I" statements. 
 
-    Original: ${transcript}
-    
-    Rephrased reflection:` 
+RULES:
+- Respond in first person perspective.
+- NEVER use any second/third person pronouns to refer to the speaker. Only use second/third person pronouns if he speaker uses them to refer to someone else
+- NEVER say "what I'm hearing" or "I understand that you..."
+- Write as if you are the person is speaking about their own experience
+- Be specific and avoid generic statements
+- Capture all main points in a crisp, concise summary
+- Do not add emotions, feelings, or interpretations not in the original
+- Make the person feel heard without judgement or advice
+- Maintain the same meaning and emotional tone
+- Paraphrase regardless of length, language or speaking or singing style
+
+Original: ${transcript}
+
+Rephrased reflection (FIRST PERSON ONLY):` 
 
     //const prompt = 'You are a simple and attentive active listener. Provide a brief paraphrased summary of this personal share in first person tense. Do not provide praise, disapproval or commentary of any sort. Use "I" statements throughout. Do not refer to the person in second or third person. Be specific and avoid generic statements. The summary should make the person feel heard, without any words that even slightly could be received as judgement or advice. The rephrasing should be different than the original speech but maintain the same meaning and emotional tone. Always use first person perspective. Paraphrase the text regardless of length, language or speaking/singing style.\n\nOriginal: ${transcript}\n\nRephrased reflection:'
     //const prompt = `Rephrase this personal reflection in first person, as if the person is speaking about their own thoughts and feelings. Use "I" statements throughout. Do not use "you" or refer to the person in second or third person. Capture the main points and feelings expressed. Be specific and avoid generic statements. The summary should make the person feel heard, without any judgement nor advice. The rephrasing should be different than the original speech but maintain the same meaning and emotional tone. Always use first person perspective.\n\nOriginal: ${transcript}\n\nRephrased reflection:`
@@ -59,7 +62,7 @@ export async function POST(request: Request) {
           return Response.json({ error: "Google API key not configured" }, { status: 500 })
         }
         const google = createGoogleGenerativeAI({ apiKey: googleApiKey })
-        model = google("gemini-1.5-flash")
+        model = google("gemini-2.0-flash-001")
         break
       default:
         // Use OpenAI (requires OPENAI_API_KEY)
@@ -80,6 +83,10 @@ export async function POST(request: Request) {
     })
 
     let summary = text?.trim();
+    
+    // Debug logging to see what Gemini is actually returning
+    console.log("Gemini raw response:", text);
+    console.log("Gemini trimmed response:", summary);
 
     // Fallback if LLM returns empty or generic response
     if (

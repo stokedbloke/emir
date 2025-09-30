@@ -43,13 +43,9 @@ export async function POST(request: Request) {
       "category": "generated"
     }));
     
-    // Convert base64 back to blob for FormData
-    const binaryString = atob(base64Audio);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
-    const audioBlobForFormData = new Blob([bytes], { type: 'audio/webm;codecs=opus' });
+    // Convert base64 back to binary properly using Buffer
+    const audioBuffer = Buffer.from(base64Audio, 'base64');
+    const audioBlobForFormData = new Blob([audioBuffer], { type: 'audio/webm;codecs=opus' });
     elevenLabsFormData.append('files', audioBlobForFormData, 'recording.webm');
     
     console.log('Sending to ElevenLabs (multipart):', {
