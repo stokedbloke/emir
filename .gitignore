@@ -36,6 +36,7 @@ components/.DS_Store
 *.pem
 *-key.pem
 ssl/
+certs/
 
 # Backup files
 *.bak
