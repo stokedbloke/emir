@@ -30,6 +30,7 @@ import {
   Heart,
   Waves,
   AlertCircle,
+  Info,
   // 🗑️ DEAD CODE: These icons are imported but never used in the UI - can be removed
   CheckCircle,
   Lock,
@@ -1653,6 +1654,7 @@ export default function TalkToMyself() {
                       1 // Always show "record"
                       + (currentSession ? 3 : 0) // summary, analysis, transcript
                       + (sessions.filter(s => s.transcript).length > 0 ? 1 : 0) // history
+                      + 1 // Always show "about"
                       + (isAdmin ? 1 : 0) // settings
                     ) > 1 && (
                       <>
@@ -1718,6 +1720,17 @@ export default function TalkToMyself() {
                             <span>Reflections</span>
                           </TabsTrigger>
                         )}
+                        <TabsTrigger
+                          value="about"
+                          disabled={!canSwitchTab && activeTab !== "about"}
+                          className={cn(
+                            "flex items-center space-x-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-500 data-[state=active]:to-indigo-600 data-[state=active]:text-white rounded-xl px-6 py-3 transition-all duration-300",
+                            !canSwitchTab && activeTab !== "about" && "opacity-50 cursor-not-allowed",
+                          )}
+                        >
+                          <Info className="w-4 h-4" />
+                          <span>About</span>
+                        </TabsTrigger>
                         {isAdmin && (
                           <TabsTrigger
                             value="settings"
@@ -2518,6 +2531,92 @@ export default function TalkToMyself() {
               </Card>
             </TabsContent>
             )}
+
+            {/* About Tab */}
+            <TabsContent value="about" className="space-y-8">
+              <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
+                <CardHeader className="bg-gradient-to-r from-purple-50 to-indigo-50 p-8">
+                  <CardTitle className="text-3xl text-gray-800 flex items-center space-x-3">
+                    <div className="w-10 h-10 bg-gradient-to-br from-purple-400 to-indigo-500 rounded-lg flex items-center justify-center flex-shrink-0">
+                      <Info className="w-5 h-5 text-white" />
+                    </div>
+                    <span>About</span>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-8 space-y-8">
+                  {/* Main About Content */}
+                  <div className="prose prose-lg max-w-none text-gray-700 leading-relaxed">
+                    <p className="mb-6">
+                      I'm obsessed with voice. Helping my daughter find hers pushed me to model trusting my own. By speaking before self-censoring kicks in, I can hear what's true for me and gain confidence in organizing my thoughts in real time.
+                    </p>
+                    
+                    <p className="mb-8">
+                      We live in a flood of news, feeds, and opinions. I'm not trying to shut the world out; I'm choosing moments to tune in. Emotional Mirror gives me a protected space to be 100% present with myself, so I can declutter what's already inside; truths, gifts, and realities, and be present in the world with more intention and calm.
+                    </p>
+                  </div>
+
+                  {/* What it is */}
+                  <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-2xl p-6">
+                    <h3 className="text-xl font-semibold text-gray-800 mb-4">What it is</h3>
+                    <p className="text-gray-700 leading-relaxed">
+                      A private, hands-free voice journal that actively listens and reflects my words back without judgment, so scattered threads become clearer and self-trust grows.
+                    </p>
+                  </div>
+
+                  {/* How I use it */}
+                  <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-2xl p-6">
+                    <h3 className="text-xl font-semibold text-gray-800 mb-4">How I use it</h3>
+                    <ul className="space-y-3 text-gray-700">
+                      <li className="flex items-start space-x-3">
+                        <span className="text-green-500 mt-1">•</span>
+                        <span>Quick debriefs after classes, podcasts, or meetings</span>
+                      </li>
+                      <li className="flex items-start space-x-3">
+                        <span className="text-green-500 mt-1">•</span>
+                        <span>Rehearsals for presentations, interviews, or hard conversations</span>
+                      </li>
+                      <li className="flex items-start space-x-3">
+                        <span className="text-green-500 mt-1">•</span>
+                        <span>Checking tone/sentiment over time so intent matches impact</span>
+                      </li>
+                      <li className="flex items-start space-x-3">
+                        <span className="text-green-500 mt-1">•</span>
+                        <span>Offloading rumination to be more present with people I love</span>
+                      </li>
+                    </ul>
+                  </div>
+
+                  {/* What it isn't */}
+                  <div className="bg-gradient-to-r from-orange-50 to-red-50 rounded-2xl p-6">
+                    <h3 className="text-xl font-semibold text-gray-800 mb-4">What it isn't</h3>
+                    <p className="text-gray-700 leading-relaxed">
+                      Therapy, coaching, or a guru. No prescriptions. Just space to hear myself.
+                    </p>
+                  </div>
+
+                  {/* Privacy & control */}
+                  <div className="bg-gradient-to-r from-gray-50 to-slate-50 rounded-2xl p-6">
+                    <h3 className="text-xl font-semibold text-gray-800 mb-4">Privacy & control</h3>
+                    <p className="text-gray-700 leading-relaxed">
+                      No audio is stored. Reflections are disassociated from names and kept anonymous. I can export everything to CSV in one click. Voice clones require explicit consent and are instantly deletable.
+                    </p>
+                  </div>
+
+                  {/* Contact */}
+                  <div className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-2xl p-6 text-center">
+                    <p className="text-gray-700 leading-relaxed">
+                      Share any comments, feedback or hopes via voice or text to{" "}
+                      <a 
+                        href="mailto:hit.neil.up@gmail.com" 
+                        className="text-purple-600 hover:text-purple-800 font-medium underline"
+                      >
+                        hit.neil.up@gmail.com
+                      </a>
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
           </Tabs>
         </div>
       </div>
