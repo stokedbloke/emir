@@ -7,6 +7,7 @@ declare var process: {
     NEXT_PUBLIC_SUPABASE_URL: string; // Public: Supabase project URL for browser
     NEXT_PUBLIC_SUPABASE_ANON_KEY: string; // Public: Supabase anon key for browser
     NEXT_PUBLIC_ADMIN_SECRET?: string; // Public: Optional admin secret for browser admin features
+    NODE_ENV?: string; // Node environment (development, production, test)
   };
 };
 
@@ -64,6 +65,13 @@ const isSafari = typeof window !== 'undefined' && /^((?!chrome|android).)*safari
 const isFirefox = typeof window !== 'undefined' && navigator.userAgent.toLowerCase().indexOf('firefox') > -1;
 
 export default function TalkToMyself() {
+  // Mobile-aware debug helper to reduce logging overhead on mobile devices
+  const isMobileUA = typeof window !== 'undefined' && /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+  const debug = isMobileUA ? (..._args: unknown[]) => {} : console.debug;
+
+  // Track if component is mounted to prevent state updates after unmount
+  const isMounted = useRef(true);
+
   // All hooks must be declared here, before any return statement
   const [hasPermission, setHasPermission] = useState<boolean | null>(false)
   const [isRecording, setIsRecording] = useState(false)
@@ -333,9 +341,113 @@ export default function TalkToMyself() {
     }
   }, [isRecording])
 
+  // === LIFECYCLE CLEANUP HOOKS ===
+  // Clean up resources when component unmounts or tab is hidden (only when not recording)
+  // IMPORTANT: This must be declared before any conditional returns to comply with Rules of Hooks
+  useEffect(() => {
+    const onHide = () => {
+      if (!isRecordingRef.current) {
+        cleanupAudioResources();
+      }
+    };
+
+    const events = [
+      { target: document, type: 'visibilitychange', handler: onHide },
+      { target: window, type: 'pagehide', handler: onHide },
+      { target: window, type: 'beforeunload', handler: onHide }
+    ];
+
+    events.forEach(({ target, type, handler }) => 
+      target.addEventListener(type, handler as EventListener)
+    );
+
+    return () => {
+      isMounted.current = false;
+      events.forEach(({ target, type, handler }) => 
+        target.removeEventListener(type, handler as EventListener)
+      );
+      // Final cleanup when unmounting, only if not actively recording
+      if (!isRecordingRef.current) {
+        cleanupAudioResources();
+      }
+      // Clear breathing timer if active
+      if (breathingTimerRef.current) {
+        clearInterval(breathingTimerRef.current);
+      }
+    };
+  }, []);
+
   // Prevent tab switching during recording or processing
   const canSwitchTab = !isRecording && !isProcessing && !isSpeaking
 
+  // Handle tab changes and reset audio state when switching to record tab
+  const handleTabChange = (newTab: string) => {
+    if (canSwitchTab) {
+      setActiveTab(newTab);
+      // Reset audio ready state when switching to record tab
+      if (newTab === "record") {
+        setIsAudioReady(false);
+      }
+    }
+  };
+
+
+  // === MICROPHONE & AUDIO RESOURCE MANAGEMENT ===
+  // Lightweight helper to release mic stream (used in hot path during stop)
+  const releaseMicrophone = () => {
+    try {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track, i) => {
+          try {
+            track.stop();
+            debug(`Stopped track ${i} (${track.kind})`);
+          } catch (e) {
+            console.warn(`Error stopping track ${i}:`, e);
+          }
+        });
+        streamRef.current = null;
+      }
+    } catch (e) {
+      console.error("Critical error in releaseMicrophone:", e);
+      // In development, throw to catch issues early
+      if (process.env.NODE_ENV === 'development') throw e;
+    }
+  };
+
+  // Full resource cleanup (mic + audio context + chunks + recognition)
+  // Used on unmount, visibility hide (when idle), and after processing
+  const cleanupAudioResources = () => {
+    releaseMicrophone();
+
+    // Close audio context if it exists
+    if (audioContextRef.current) {
+      try {
+        if (audioContextRef.current.state !== "closed") {
+          audioContextRef.current.close().catch(console.warn);
+        }
+      } catch (e) {
+        console.warn("Error closing audio context:", e);
+      }
+      audioContextRef.current = null;
+    }
+
+    // Clear audio chunks to free memory
+    audioChunksRef.current = [];
+
+    // Stop recognition and clear handlers defensively
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.onend = null;
+        recognitionRef.current.onresult = null;
+        recognitionRef.current.onerror = null;
+        recognitionRef.current.stop();
+      } catch (e) {
+        console.warn("Error stopping recognition:", e);
+      } finally {
+        recognitionRef.current = null;
+      }
+    }
+  };
 
   const checkMicrophonePermission = async () => {
     try {
@@ -379,6 +491,11 @@ export default function TalkToMyself() {
       return;
     }
     try {
+      // Release any existing stream before acquiring a new one to avoid parallel streams
+      if (streamRef.current) {
+        releaseMicrophone();
+      }
+
       console.log("Requesting microphone access...");
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -434,8 +551,25 @@ export default function TalkToMyself() {
 
 
 
-  const startRecording = () => {
-    if (!streamRef.current || isSpeaking) return
+  const startRecording = async () => {
+    if (isSpeaking) return;
+
+    // Re-acquire stream if it was released (e.g., after previous stop or cleanup)
+    if (!streamRef.current) {
+      try {
+        await initializeMicrophone();
+      } catch (e) {
+        console.error("Failed to re-initialize microphone:", e);
+      }
+      if (!streamRef.current) {
+        toast({
+          title: "Microphone unavailable",
+          description: "Couldn't access the microphone. Please grant permission and try again.",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
 
     if (!globalSettings) {
       toast({
@@ -445,6 +579,12 @@ export default function TalkToMyself() {
       });
       return
     }
+
+    // Reset light UI state for smooth transition
+    setIsAudioReady(false);
+    setIsSpeaking(false);
+    setProcessingStage("");
+    setProgress(0);
 
     // Note: Removed explicit permission checks to avoid browser compatibility issues
     // The existing hasPermission state and audio-capture error handling are sufficient
@@ -528,28 +668,34 @@ export default function TalkToMyself() {
   }
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecordingRef.current) {
-      try {
-        mediaRecorderRef.current.stop()
-      } catch (error) {
-        console.log("Error stopping MediaRecorder:", error)
-      }
-
-      setIsRecording(false)
-      setIsProcessing(true) // Set processing state immediately to prevent UI flash
-      isRecordingRef.current = false
-      playChime("stop")
-
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.stop()
-          recognitionRef.current = null
-        } catch (error) {
-          console.log("Error stopping speech recognition:", error)
-        }
-      }
+    if (!isRecordingRef.current) {
+      // Not actively recording — still ensure resources are not lingering
+      releaseMicrophone();
+      return;
     }
+
+    try {
+      mediaRecorderRef.current?.stop();
+      mediaRecorderRef.current = null;
+    } catch (e) {
+      console.warn("Error stopping MediaRecorder:", e);
+    }
+
+    try {
+      recognitionRef.current?.stop();
+    } catch (e) {
+      console.warn("Error stopping recognition:", e);
+    }
+
+    playChime("stop");
+    isRecordingRef.current = false;
+    setIsRecording(false);
+    setIsProcessing(true); // Set processing state immediately to prevent UI flash
     setLiveTranscript("");
+
+    // Release mic ASAP so iOS clears system "in-call/mic-in-use" state
+    // Note: processAudio will be called by MediaRecorder's onstop handler
+    releaseMicrophone();
   }
 
   const startSpeechRecognition = () => {
@@ -926,6 +1072,14 @@ export default function TalkToMyself() {
       setIsProcessing(false)
       setProcessingStage("")
       setProgress(0)
+      
+      // Re-acquire mic stream for next recording session
+      // This is a background operation and won't prompt the user
+      if (!streamRef.current && hasPermission) {
+        initializeMicrophone().catch(err => {
+          console.warn("Failed to re-acquire mic after processing:", err);
+        });
+      }
     }
   }
 
@@ -1647,7 +1801,7 @@ export default function TalkToMyself() {
         )}
 
         <div className="relative max-w-7xl mx-auto px-6 py-12">
-          <Tabs value={activeTab} onValueChange={canSwitchTab ? setActiveTab : undefined} className="space-y-8">
+          <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-8">
             {/* Tab Navigation */}
             <div className="flex justify-center">
               {visibleTabs > 1 && (
@@ -2735,13 +2889,13 @@ function ServiceStatusAndTestTools() {
                 )}
                           </div>
               <div className="space-y-2">
-                <button
+              <button
                   className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 w-full"
-                  onClick={() => handleTest(service)}
-                  disabled={testLoading[service.key]}
-                >
-                  {testLoading[service.key] ? "Testing..." : "Test API"}
-                </button>
+                onClick={() => handleTest(service)}
+                disabled={testLoading[service.key]}
+              >
+                {testLoading[service.key] ? "Testing..." : "Test API"}
+              </button>
                 {service.key === "gemini" && (
                   <button
                     className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50 w-full"
@@ -2755,14 +2909,14 @@ function ServiceStatusAndTestTools() {
               {testResults[service.key] && (
                 <div className="mt-2 text-xs text-gray-700 break-all">
                   {testResults[service.key]}
-                </div>
+                          </div>
               )}
               {service.key === "gemini" && testResults["gemini-models"] && (
                 <div className="mt-2 text-xs text-gray-700 break-all">
                   <strong>Available Models:</strong>
                   <pre className="whitespace-pre-wrap">{testResults["gemini-models"]}</pre>
                 </div>
-              )}
+                        )}
                       </div>
           ))}
                     </div>
