@@ -48,3 +48,4 @@ validation-reports/
 # This is a development-only file that shouldn't be in production
 # Vercel Compatibility: Vercel doesn't use custom servers - it uses Next.js serverless functions
 server.js
+_archive/

@@ -67,7 +67,7 @@ const isFirefox = typeof window !== 'undefined' && navigator.userAgent.toLowerCa
 export default function TalkToMyself() {
   // Mobile-aware debug helper to reduce logging overhead on mobile devices
   const isMobileUA = typeof window !== 'undefined' && /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-  const debug = isMobileUA ? (..._args: unknown[]) => {} : console.debug;
+  const debug = isMobileUA ? (..._args: unknown[]) => { } : console.debug;
 
   // Track if component is mounted to prevent state updates after unmount
   const isMounted = useRef(true);
@@ -99,7 +99,7 @@ export default function TalkToMyself() {
   const fullRecognitionTranscriptRef = useRef("");
   const [actualTTSService, setActualTTSService] = useState<string>("browser");
   const [userId, setUserId] = useState<string>("");
-  
+
   // Sessions state management - reverted from useSessions hook for simplicity
   const [sessions, setSessions] = useState<SessionData[]>([]);
   const [currentSession, setCurrentSession] = useState<SessionData | null>(null);
@@ -178,7 +178,7 @@ export default function TalkToMyself() {
       const responseData = await res.json();
       console.log("Supabase save response:", responseData);
 
-        if (!res.ok) {
+      if (!res.ok) {
         console.error("Failed to save reflection:", res.status, res.statusText);
         toast({
           title: "Error",
@@ -204,7 +204,7 @@ export default function TalkToMyself() {
       });
     }
   };
-  
+
   // 🗑️ DEAD CODE: This counts speech errors but the count isn't displayed - could be simplified to just show/hide the error message
   // Removed speechErrorCount - no longer penalizing natural speech pauses
   const [speechRecognitionError, setSpeechRecognitionError] = useState<string | null>(null);
@@ -212,11 +212,11 @@ export default function TalkToMyself() {
   // Removed MAX_SPEECH_ERRORS - no longer penalizing natural speech pauses
   // 🗑️ DEAD CODE: These voice selection variables are set but never used for actual voice selection - can be removed
   const [selectedElevenLabsVoice, setSelectedElevenLabsVoice] = useState<string>(DEFAULT_VALUES.ELEVENLABS_VOICE_ID);
-  const [elevenLabsVoices, setElevenLabsVoices] = useState<{id: string, name: string}[]>([]);
+  const [elevenLabsVoices, setElevenLabsVoices] = useState<{ id: string, name: string }[]>([]);
   const [selectedGoogleLang, setSelectedGoogleLang] = useState<string>("en-US");
   const [selectedGoogleGender, setSelectedGoogleGender] = useState<string>("FEMALE");
   const [selectedHumeVoice, setSelectedHumeVoice] = useState<string>("ITO");
-  
+
   // Use settings hook
   const { globalSettings, globalSettingsLoading, globalSettingsError, handleGlobalSettingsChange, setGlobalSettings } = useSettings();
   const { serviceStatus, setServiceStatus } = useServiceStatus();
@@ -235,7 +235,7 @@ export default function TalkToMyself() {
   const [isCloningVoice, setIsCloningVoice] = useState(false);
   const [hasRequestedVoiceClone, setHasRequestedVoiceClone] = useState(false);
   const [voiceCloneError, setVoiceCloneError] = useState<string | null>(null);
-  
+
   // Voice clone state management
   const [userVoiceCloneId, setUserVoiceCloneId] = useState<string | null>(null);
   const [hasVoiceClone, setHasVoiceClone] = useState(false);
@@ -357,13 +357,13 @@ export default function TalkToMyself() {
       { target: window, type: 'beforeunload', handler: onHide }
     ];
 
-    events.forEach(({ target, type, handler }) => 
+    events.forEach(({ target, type, handler }) =>
       target.addEventListener(type, handler as EventListener)
     );
 
     return () => {
       isMounted.current = false;
-      events.forEach(({ target, type, handler }) => 
+      events.forEach(({ target, type, handler }) =>
         target.removeEventListener(type, handler as EventListener)
       );
       // Final cleanup when unmounting, only if not actively recording
@@ -452,14 +452,14 @@ export default function TalkToMyself() {
   const checkMicrophonePermission = async () => {
     try {
       console.log("Querying microphone permission...");
-      
+
       // Check if permissions API is supported
       if (!navigator.permissions || !navigator.permissions.query) {
         console.log("Permissions API not supported, trying direct microphone access...");
         await initializeMicrophone();
         return;
       }
-      
+
       const result = await navigator.permissions.query({ name: "microphone" as PermissionName })
       console.log("Permission result:", result.state);
       if (result.state === "granted") {
@@ -523,11 +523,15 @@ export default function TalkToMyself() {
     console.log('requestMicrophoneAccess called, current hasPermission:', hasPermission);
     setIsRequestingMic(true);
     setMicrophoneError(null);
+
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setMicrophoneError("Microphone access is not supported on this device or browser. Please use the latest version of Safari or Chrome on iOS/Android, or try on desktop.");
+      const errorMsg = "Microphone access is not supported on this device or browser. Please use the latest version of Safari or Chrome on iOS/Android, or try on desktop.";
+      console.error(errorMsg);
+      setMicrophoneError(errorMsg);
       setIsRequestingMic(false);
       return;
     }
+
     navigator.mediaDevices.getUserMedia({ audio: true })
       .then((stream: MediaStream) => {
         console.log('Microphone access granted, setting up stream');
@@ -539,7 +543,8 @@ export default function TalkToMyself() {
       })
       .catch((err) => {
         console.error('Microphone access denied:', err);
-        setMicrophoneError("Microphone access denied or unavailable. Please check your browser settings and try again.");
+        const errorMsg = "Microphone access denied or unavailable. Please check your browser settings and try again.";
+        setMicrophoneError(errorMsg);
         setIsRequestingMic(false);
       });
   };
@@ -591,7 +596,7 @@ export default function TalkToMyself() {
 
     // Don't delete voice clone when starting new recording - let it persist across sessions
     // Voice clone will only be deleted when user explicitly starts a new session or when handleVoiceClone is called
-    
+
     // Don't reset voice clone request flag - let it persist across sessions
     // Voice clone will only be deleted when user explicitly clicks "Delete Clone"
 
@@ -606,7 +611,7 @@ export default function TalkToMyself() {
     console.log("Starting MediaRecorder with stream:", streamRef.current)
     console.log("Stream tracks:", streamRef.current.getTracks())
     console.log("Audio tracks:", streamRef.current.getAudioTracks())
-    
+
     let mimeType: string = AUDIO_CONSTANTS.MIME_TYPE_FALLBACK;
     if (typeof MediaRecorder !== 'undefined') {
       if (!MediaRecorder.isTypeSupported(mimeType)) {
@@ -621,40 +626,40 @@ export default function TalkToMyself() {
     try {
       const recorder = new MediaRecorder(streamRef.current, mimeType ? { mimeType } : undefined);
       mediaRecorderRef.current = recorder
-    mediaRecorderRef.current.ondataavailable = (event) => {
-      console.log("MediaRecorder ondataavailable:", event.data.size, "bytes")
-      if (event.data.size > 0) {
-        audioChunksRef.current.push(event.data)
-        console.log("Added audio chunk, total chunks:", audioChunksRef.current.length)
-      } else {
-        console.warn("Received empty audio chunk")
+      mediaRecorderRef.current.ondataavailable = (event) => {
+        console.log("MediaRecorder ondataavailable:", event.data.size, "bytes")
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data)
+          console.log("Added audio chunk, total chunks:", audioChunksRef.current.length)
+        } else {
+          console.warn("Received empty audio chunk")
+        }
       }
-    }
 
-    mediaRecorderRef.current.onstop = processAudio
-    try {
-      mediaRecorderRef.current.start()
-      console.log("MediaRecorder started successfully")
-      setIsRecording(true)
-      isRecordingRef.current = true
-      // Reset speech recognition error when starting a new recording
-      setSpeechRecognitionError(null)
-      playChime("start")
-    } catch (err) {
-      console.error("Failed to start MediaRecorder:", err)
-      setIsRecording(false)
-      isRecordingRef.current = false
-      toast({
-        title: "Could not start recording",
-        description: "Please check your microphone permissions, ensure no other app is using the mic, and try again.",
-        variant: "destructive",
-      });
-    }
+      mediaRecorderRef.current.onstop = processAudio
+      try {
+        mediaRecorderRef.current.start()
+        console.log("MediaRecorder started successfully")
+        setIsRecording(true)
+        isRecordingRef.current = true
+        // Reset speech recognition error when starting a new recording
+        setSpeechRecognitionError(null)
+        playChime("start")
+      } catch (err) {
+        console.error("Failed to start MediaRecorder:", err)
+        setIsRecording(false)
+        isRecordingRef.current = false
+        toast({
+          title: "Could not start recording",
+          description: "Please check your microphone permissions, ensure no other app is using the mic, and try again.",
+          variant: "destructive",
+        });
+      }
 
-    // When you start a new recording, reset the ref:
-    fullRecognitionTranscriptRef.current = "";
+      // When you start a new recording, reset the ref:
+      fullRecognitionTranscriptRef.current = "";
 
-    startSpeechRecognition()
+      startSpeechRecognition()
     } catch (err) {
       console.error("Failed to create MediaRecorder:", err)
       setIsRecording(false)
@@ -710,7 +715,7 @@ export default function TalkToMyself() {
     recognitionRef.current.continuous = true
     recognitionRef.current.interimResults = true
     recognitionRef.current.lang = "en-US"
-    ;(window as any).lastRecognitionTranscript = ""
+      ; (window as any).lastRecognitionTranscript = ""
 
     recognitionRef.current.onresult = (event: any) => {
       setSpeechRecognitionError(null);
@@ -745,16 +750,16 @@ export default function TalkToMyself() {
 
     recognitionRef.current.onerror = (event: any) => {
       console.error("Speech recognition error:", event.error, event);
-      
+
       if (event.error === "audio-capture") {
         // Audio capture error - microphone access issue
         setSpeechRecognitionError("Microphone access denied. Please check your browser permissions and try again.");
-            toast({
+        toast({
           title: "Microphone Access Denied",
           description: "Please allow microphone access in your browser and refresh the page.",
-              variant: "destructive",
-            });
-            stopRecording();
+          variant: "destructive",
+        });
+        stopRecording();
       } else if (event.error === "no-speech") {
         // Ignore no-speech errors completely - silence is natural in speech
         // Users pause to think, breathe, or structure thoughts
@@ -904,7 +909,7 @@ export default function TalkToMyself() {
         expectedType: AUDIO_CONSTANTS.MIME_TYPE,
         isMobile: /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
       })
-      
+
       if (!audioBlob || audioBlob.size === 0) {
         console.error("Audio blob is empty!")
         toast({
@@ -919,7 +924,7 @@ export default function TalkToMyself() {
       }
 
       let transcript = (await transcribeAudio(audioBlob)).trim();
-      
+
       // Remove trigger phrase from the end of the transcript
       const triggers = SPEECH_TRIGGERS;
       for (const trigger of triggers) {
@@ -950,12 +955,15 @@ export default function TalkToMyself() {
       console.log(`Essential processing completed in ${processingTime}ms`);
 
       // Start emotion analysis in background - not needed for immediate user experience
-      const emotionPromise = analyzeEmotions(transcript, audioBlob).catch(console.error);
+      const emotionPromise = analyzeEmotions(transcript, audioBlob).catch((err) => {
+        console.error("Emotion analysis failed:", err);
+        return []; // Return empty array instead of undefined
+      });
 
       console.log("Vocal characteristics:", vocalCharacteristics);
 
       const trimmedSummary = summary.trim();
-      
+
       // Start TTS generation in parallel while we process the results
       // This reduces perceived wait time by starting audio generation early
       let ttsPromise: Promise<void> | null = null;
@@ -982,9 +990,9 @@ export default function TalkToMyself() {
 
       // Use ONLY the red bubble timer - store the duration directly
       const recordingDuration = currentRecordingTimeRef.current;
-      
+
       console.log("Red bubble timer shows:", recordingDuration, "seconds");
-      
+
       const newSession: SessionData = {
         id: Date.now().toString(),
         timestamp: new Date(), // Just use current time
@@ -993,7 +1001,7 @@ export default function TalkToMyself() {
         emotions: [], // Will be populated when background analysis completes
         vocalCharacteristics: vocalCharacteristics || {
           tone: "Unknown",
-          pace: "Unknown", 
+          pace: "Unknown",
           pitch: "Unknown",
           volume: "Unknown",
           confidence: 0
@@ -1005,10 +1013,10 @@ export default function TalkToMyself() {
 
       setSessions((prev) => [newSession, ...prev])
       setCurrentSession(newSession)
-      
+
       // Switch to summary tab after a brief delay to ensure UI is ready
       setTimeout(() => {
-      setActiveTab("summary")
+        setActiveTab("summary")
       }, 100)
 
       // Auto-play the summary immediately for fast user experience
@@ -1023,6 +1031,7 @@ export default function TalkToMyself() {
       }
 
 
+
       // Complete background emotion analysis and save to Supabase
       if (userId) {
         // Run emotion analysis and Supabase save in background without blocking the UI
@@ -1031,39 +1040,39 @@ export default function TalkToMyself() {
             // Wait for emotion analysis to complete
             const emotions = await emotionPromise;
             console.log("Background emotion analysis completed:", emotions);
-            
+
             // Update the current session with emotions
-            if (emotions) {
+            if (emotions && emotions.length > 0) {
               console.log("Updating UI with emotions:", emotions);
               setCurrentSession(prev => prev ? { ...prev, emotions } : null);
-              setSessions(prev => prev.map(session => 
+              setSessions(prev => prev.map(session =>
                 session.id === newSession.id ? { ...session, emotions } : session
               ));
-              
+
               // Force a re-render to ensure the analysis tab shows the emotions
               console.log("Emotions updated in UI, analysis tab should now show data");
             }
-            
-          const reflectionData = {
-            userId,
-            transcript,
-            summary,
-            emotions,
-            vocal: vocalCharacteristics,
-            device_info: getDeviceInfo(),
-            browser_info: getBrowserInfo(),
-            location_info: null, // Could add geolocation if needed
-            tts_service_used: actualTTSService,
-            summary_service_used: globalSettings?.summary_service || 'unknown',
-            recording_duration: recordingDuration, // Store the actual duration from red bubble timer
-          };
+
+            const reflectionData = {
+              userId,
+              transcript,
+              summary,
+              emotions,
+              vocal: vocalCharacteristics,
+              device_info: getDeviceInfo(),
+              browser_info: getBrowserInfo(),
+              location_info: null, // Could add geolocation if needed
+              tts_service_used: actualTTSService,
+              summary_service_used: globalSettings?.summary_service || 'unknown',
+              recording_duration: recordingDuration, // Store the actual duration from red bubble timer
+            };
             console.log("Sending reflection data to Supabase (background):", reflectionData);
-          console.log("Recording duration from red bubble:", recordingDuration, "seconds");
-          await saveReflectionToSupabase(reflectionData);
+            console.log("Recording duration from red bubble:", recordingDuration, "seconds");
+            await saveReflectionToSupabase(reflectionData);
             console.log("Reflection saved to Supabase successfully");
-        } catch (err) {
+          } catch (err) {
             console.error("Failed to complete background processing:", err);
-        }
+          }
         })();
       }
     } catch (error) {
@@ -1072,7 +1081,7 @@ export default function TalkToMyself() {
       setIsProcessing(false)
       setProcessingStage("")
       setProgress(0)
-      
+
       // Re-acquire mic stream for next recording session
       // This is a background operation and won't prompt the user
       if (!streamRef.current && hasPermission) {
@@ -1233,39 +1242,216 @@ export default function TalkToMyself() {
     }
   }
 
-  const analyzeEmotions = async (text: string, audioBlob?: Blob): Promise<EmotionAnalysis[]> => {
+  // [CHANGE: 2025-12-14] Restored client-side audio preprocessing.
+  // DESCRIPTION: Chrome MediaRecorder produces 'audio/webm' (Opus) by default.
+  // The Web Audio API's decodeAudioData() method CANNOT decode Opus in some contexts or if header is incomplete.
+  // However, we successfully use it here to decode the recording and re-encode as linear PCM WAV.
+  //
+  // REASON: Valence API requires 'audio/wav' (Pulse Code Modulation). Sending WebM directly causes 500 Error.
+  // We manually construct a WAV header and send raw PCM data.
+  //
+  // RISK: Client-side processing consumes CPU and adds slight latency before API call.
+  // DEBT: Manual WAV header construction (`audioBufferToWav`) is verbose. Could be replaced by a library.
+  //
+  // Preprocess audio for Valence API requirements (44.1kHz, stereo, 5-30s)
+  // Preprocess audio for Valence API requirements (44.1kHz, stereo, 5-30s)
+  const preprocessAudioForValence = async (audioBlob: Blob): Promise<Blob> => {
+    let audioContext: AudioContext | null = null;
     try {
-      // Convert audio blob to base64 for the API
-      let audioBase64 = null;
-      if (audioBlob) {
-        audioBase64 = await new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as string);
-          reader.readAsDataURL(audioBlob);
-        });
+      console.log('Starting audio preprocessing for Valence...');
+      console.log('Input blob:', { size: audioBlob.size, type: audioBlob.type });
+
+      audioContext = new AudioContext({ sampleRate: 44100 });
+      const arrayBuffer = await audioBlob.arrayBuffer();
+      console.log('ArrayBuffer size:', arrayBuffer.byteLength);
+
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      // ... (rest of processing logic stays same until return) ...
+      console.log('Decoded audio:', {
+        duration: audioBuffer.duration,
+        channels: audioBuffer.numberOfChannels,
+        sampleRate: audioBuffer.sampleRate,
+        length: audioBuffer.length
+      });
+
+      // Valence discrete API has limits: minimum 5s, maximum ~30s
+      const minSamples = 44100 * 5; // 5 seconds
+      const maxSamples = 44100 * 30; // 30 seconds
+
+      // Truncate if too long
+      let processedBuffer = audioBuffer;
+      if (audioBuffer.length > maxSamples) {
+        processedBuffer = audioContext.createBuffer(
+          audioBuffer.numberOfChannels,
+          maxSamples,
+          44100
+        );
+        for (let channel = 0; channel < audioBuffer.numberOfChannels; channel++) {
+          const sourceData = audioBuffer.getChannelData(channel);
+          const targetData = processedBuffer.getChannelData(channel);
+          targetData.set(sourceData.subarray(0, maxSamples));
+        }
       }
 
-      const response = await fetch(API_ENDPOINTS.EMOTIONS_HYBRID, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text,
-          audioBlob: audioBase64,
-        }),
-      })
-
-      if (response.ok) {
-        const data = await response.json()
-        console.log("Hybrid emotion analysis result:", data);
-        return data.emotions
+      // Ensure stereo (2 channels)
+      if (processedBuffer.numberOfChannels === 1) {
+        const stereoBuffer = audioContext.createBuffer(
+          2,
+          processedBuffer.length,
+          44100
+        );
+        const monoData = processedBuffer.getChannelData(0);
+        stereoBuffer.copyToChannel(monoData, 0);
+        stereoBuffer.copyToChannel(monoData, 1);
+        processedBuffer = stereoBuffer;
       }
+
+      // Ensure minimum 5 seconds duration
+      let finalBuffer = processedBuffer;
+      if (processedBuffer.length < minSamples) {
+        finalBuffer = audioContext.createBuffer(
+          2,
+          minSamples,
+          44100
+        );
+        for (let channel = 0; channel < 2; channel++) {
+          const sourceData = processedBuffer.getChannelData(channel);
+          const targetData = finalBuffer.getChannelData(channel);
+          targetData.set(sourceData);
+        }
+      }
+
+      console.log('Converting to WAV format...');
+      // Convert to WAV format
+      const wavBlob = audioBufferToWav(finalBuffer);
+      console.log('WAV blob created:', { size: wavBlob.size, type: wavBlob.type });
+
+      return wavBlob;
     } catch (error) {
-      console.error("Hybrid emotion analysis error:", error)
+      console.error("Audio preprocessing error:", error);
+      console.error("Error details:", error instanceof Error ? error.message : String(error));
+      // Return original blob if preprocessing fails
+      return audioBlob;
+    } finally {
+      if (audioContext) {
+        await audioContext.close();
+      }
+    }
+  };
+
+  // Convert AudioBuffer to WAV Blob
+  const audioBufferToWav = (buffer: AudioBuffer): Blob => {
+    const numberOfChannels = buffer.numberOfChannels;
+    const sampleRate = buffer.sampleRate;
+    const format = 1; // PCM
+    const bitDepth = 16;
+
+    const bytesPerSample = bitDepth / 8;
+    const blockAlign = numberOfChannels * bytesPerSample;
+
+    const data = new Float32Array(buffer.length * numberOfChannels);
+    for (let channel = 0; channel < numberOfChannels; channel++) {
+      const channelData = buffer.getChannelData(channel);
+      for (let i = 0; i < buffer.length; i++) {
+        data[i * numberOfChannels + channel] = channelData[i];
+      }
     }
 
-    // No fallback emotions - return empty array when analysis fails
-    console.warn("Emotion analysis failed, returning empty emotions array");
-    return []
+    const dataLength = data.length * bytesPerSample;
+    const bufferLength = 44 + dataLength;
+    const arrayBuffer = new ArrayBuffer(bufferLength);
+    const view = new DataView(arrayBuffer);
+
+    // Write WAV header
+    const writeString = (offset: number, string: string) => {
+      for (let i = 0; i < string.length; i++) {
+        view.setUint8(offset + i, string.charCodeAt(i));
+      }
+    };
+
+    writeString(0, 'RIFF');
+    view.setUint32(4, bufferLength - 8, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true); // fmt chunk size
+    view.setUint16(20, format, true);
+    view.setUint16(22, numberOfChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * blockAlign, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, bitDepth, true);
+    writeString(36, 'data');
+    view.setUint32(40, dataLength, true);
+
+    // Write audio data
+    let offset = 44;
+    for (let i = 0; i < data.length; i++) {
+      const sample = Math.max(-1, Math.min(1, data[i]));
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+      offset += 2;
+    }
+
+    return new Blob([arrayBuffer], { type: 'audio/wav' });
+  };
+
+  const analyzeEmotions = async (text: string, audioBlob?: Blob): Promise<EmotionAnalysis[]> => {
+    const combinedEmotions: EmotionAnalysis[] = [];
+
+    try {
+      // Call text emotions API (HuggingFace)
+      const textResponse = await fetch(API_ENDPOINTS.EMOTIONS, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+
+      if (textResponse.ok) {
+        const data = await textResponse.json();
+        console.log("Text emotion analysis result:", data);
+        const textEmotions = (data.emotions || []).map((e: any) => ({ ...e, sources: ['text'] }));
+        console.log("Mapped text emotions:", textEmotions);
+        combinedEmotions.push(...textEmotions);
+      } else {
+        console.warn("Text emotion analysis failed:", textResponse.status);
+      }
+    } catch (error) {
+      console.error("Text emotion analysis error:", error);
+    }
+
+    // Call Valence audio emotions API (if audio provided)
+    if (audioBlob) {
+      try {
+        // Preprocess audio in browser to meet Valence requirements
+        // (44.1kHz, stereo, minimum 5 seconds)
+        const preprocessedBlob = await preprocessAudioForValence(audioBlob);
+
+        // Convert audio blob to base64
+        const audioBase64 = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.readAsDataURL(preprocessedBlob);
+        });
+
+        const valenceResponse = await fetch(API_ENDPOINTS.EMOTIONS_VALENCE, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ audioBlob: audioBase64 }),
+        });
+
+        if (valenceResponse.ok) {
+          const data = await valenceResponse.json();
+          console.log("Valence audio emotion analysis result:", data);
+          const audioEmotions = (data.emotions || []).map((e: any) => ({ ...e, sources: ['audio-valence'] }));
+          combinedEmotions.push(...audioEmotions);
+        } else {
+          console.warn("Valence audio emotion analysis failed:", valenceResponse.status);
+        }
+      } catch (error) {
+        console.error("Valence audio emotion analysis error:", error);
+      }
+    }
+
+    return combinedEmotions;
   }
 
   // console.log("TTS service selected:", settings.voiceService);
@@ -1297,14 +1483,14 @@ export default function TalkToMyself() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ voiceId: userVoiceCloneId, userId }),
         });
-        
+
         // Clear local state
         setUserVoiceCloneId(null);
         setHasVoiceClone(false);
         setHasRequestedVoiceClone(false);
         setVoiceCloneError(null); // Clear any error messages
         localStorage.removeItem(`${DEFAULT_VALUES.USER_VOICE_CLONE_PREFIX}${userId}`);
-        
+
         toast({
           title: "Voice clone deleted",
           description: "You're now using the default voice for TTS.",
@@ -1338,124 +1524,124 @@ export default function TalkToMyself() {
    * a new one with the latest audio, rather than truly combining audio samples.
    */
   const handleVoiceClone = async () => {
-      // Validate that we have audio to work with
-      if (!currentSession?.audioBlob) {
-        toast({
-          title: "No audio available",
-          description: "Please record a reflection first to clone your voice.",
-          variant: "destructive",
-        });
+    // Validate that we have audio to work with
+    if (!currentSession?.audioBlob) {
+      toast({
+        title: "No audio available",
+        description: "Please record a reflection first to clone your voice.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsCloningVoice(true);
+    setHasRequestedVoiceClone(true); // Mark that user wants voice clone
+    setVoiceCloneError(null); // Clear any previous errors
+
+    // Show immediate feedback to user
+    toast({
+      title: "Starting voice clone...",
+      description: "Creating your personalized voice clone. This may take a few seconds.",
+    });
+
+    try {
+      // Create a new blob to ensure it's fresh
+      const audioBlob = new Blob([currentSession.audioBlob], { type: currentSession.audioBlob.type });
+      console.log('Fresh audio blob for FormData:', {
+        size: audioBlob.size,
+        type: audioBlob.type,
+        originalSize: currentSession.audioBlob.size,
+        originalType: currentSession.audioBlob.type
+      });
+
+      if (audioBlob.size === 0) {
+        setVoiceCloneError('No audio data available. Please try recording again.');
         return;
       }
-      
-      setIsCloningVoice(true);
-      setHasRequestedVoiceClone(true); // Mark that user wants voice clone
-      setVoiceCloneError(null); // Clear any previous errors
-      
-      // Show immediate feedback to user
-      toast({
-        title: "Starting voice clone...",
-        description: "Creating your personalized voice clone. This may take a few seconds.",
-      });
-      
-      try {
-        // Create a new blob to ensure it's fresh
-        const audioBlob = new Blob([currentSession.audioBlob], { type: currentSession.audioBlob.type });
-        console.log('Fresh audio blob for FormData:', {
-          size: audioBlob.size,
-          type: audioBlob.type,
-          originalSize: currentSession.audioBlob.size,
-          originalType: currentSession.audioBlob.type
+
+      const formData = new FormData();
+      formData.append('audio', audioBlob, 'recording.webm');
+      formData.append('userId', userId);
+
+      // If we already have a voice clone, improve it instead of creating a new one
+      // This ensures we maintain only one voice clone per user
+      if (hasVoiceClone && userVoiceCloneId) {
+        formData.append('voiceId', userVoiceCloneId);
+        console.log('Replacing existing voice clone:', userVoiceCloneId);
+        console.log('Current voice clone state:', { hasVoiceClone, userVoiceCloneId });
+
+        const response = await fetch(API_ENDPOINTS.VOICE_CLONE_IMPROVE, {
+          method: 'POST',
+          body: formData,
         });
-        
-        if (audioBlob.size === 0) {
-          setVoiceCloneError('No audio data available. Please try recording again.');
-          return;
-        }
-        
-        const formData = new FormData();
-        formData.append('audio', audioBlob, 'recording.webm');
-        formData.append('userId', userId);
-        
-        // If we already have a voice clone, improve it instead of creating a new one
-        // This ensures we maintain only one voice clone per user
-        if (hasVoiceClone && userVoiceCloneId) {
-          formData.append('voiceId', userVoiceCloneId);
-          console.log('Replacing existing voice clone:', userVoiceCloneId);
-          console.log('Current voice clone state:', { hasVoiceClone, userVoiceCloneId });
-          
-          const response = await fetch(API_ENDPOINTS.VOICE_CLONE_IMPROVE, {
-            method: 'POST',
-            body: formData,
+
+        if (response.ok) {
+          const data = await response.json();
+          console.log('Voice clone improved successfully:', data);
+
+          // Update the voice clone ID (ElevenLabs returns a new ID for improved clones)
+          setUserVoiceCloneId(data.voiceId);
+          setHasVoiceClone(true);
+          localStorage.setItem(`${DEFAULT_VALUES.USER_VOICE_CLONE_PREFIX}${userId}`, data.voiceId);
+
+          toast({
+            title: "Voice clone replaced! 🎉",
+            description: "Your voice clone has been replaced with a new version using the latest audio. Click 'Listen' to hear the updated voice.",
           });
-          
-          if (response.ok) {
-            const data = await response.json();
-            console.log('Voice clone improved successfully:', data);
-            
-            // Update the voice clone ID (ElevenLabs returns a new ID for improved clones)
-            setUserVoiceCloneId(data.voiceId);
-            setHasVoiceClone(true);
-            localStorage.setItem(`${DEFAULT_VALUES.USER_VOICE_CLONE_PREFIX}${userId}`, data.voiceId);
-            
-            toast({
-              title: "Voice clone replaced! 🎉",
-              description: "Your voice clone has been replaced with a new version using the latest audio. Click 'Listen' to hear the updated voice.",
-            });
-          } else {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.error || 'Failed to improve voice clone');
-          }
         } else {
-          // Create a new voice clone
-          console.log('Creating NEW voice clone for audio:', { size: audioBlob.size, type: audioBlob.type });
-          console.log('Current voice clone state:', { hasVoiceClone, userVoiceCloneId });
-          
-          const response = await fetch(API_ENDPOINTS.VOICE_CLONE, {
-            method: 'POST',
-            body: formData,
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.error || 'Failed to improve voice clone');
+        }
+      } else {
+        // Create a new voice clone
+        console.log('Creating NEW voice clone for audio:', { size: audioBlob.size, type: audioBlob.type });
+        console.log('Current voice clone state:', { hasVoiceClone, userVoiceCloneId });
+
+        const response = await fetch(API_ENDPOINTS.VOICE_CLONE, {
+          method: 'POST',
+          body: formData,
+        });
+
+        console.log('Voice clone creation response:', response.status);
+
+
+        if (response.ok) {
+          const data = await response.json();
+          console.log('Voice clone created successfully:', data);
+
+          setUserVoiceCloneId(data.voiceId);
+          setHasVoiceClone(true);
+          localStorage.setItem(`${DEFAULT_VALUES.USER_VOICE_CLONE_PREFIX}${userId}`, data.voiceId);
+
+          toast({
+            title: "Voice clone created! 🎉",
+            description: "Your voice clone is ready! Click 'Listen' to hear your reflection in your own voice.",
           });
-          
-          console.log('Voice clone creation response:', response.status);
-          
-          
-          if (response.ok) {
-            const data = await response.json();
-            console.log('Voice clone created successfully:', data);
-            
-            setUserVoiceCloneId(data.voiceId);
-            setHasVoiceClone(true);
-            localStorage.setItem(`${DEFAULT_VALUES.USER_VOICE_CLONE_PREFIX}${userId}`, data.voiceId);
-            
-            toast({
-              title: "Voice clone created! 🎉",
-              description: "Your voice clone is ready! Click 'Listen' to hear your reflection in your own voice.",
-            });
-          } else {
-            const errorData = await response.json().catch(() => ({}));
-            
-            // Check if it's an API limit error
-            if (response.status === 403 && errorData.detail && errorData.detail.status === 'voice_add_edit_limit_reached') {
-              throw new Error('API_LIMIT_REACHED');
-            }
-            
-            throw new Error(errorData.detail?.message || errorData.error || 'Failed to create voice clone');
-          }
-        }
-        
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : "Please try again or use the default voice.";
-        
-        // Set error state for UI display instead of invasive toast
-        if (errorMessage === 'API_LIMIT_REACHED') {
-          setVoiceCloneError('Voice clone limit reached. Try again next month or use the default voice.');
         } else {
-          setVoiceCloneError('Unable to create voice clone. You can still use the default voice.');
+          const errorData = await response.json().catch(() => ({}));
+
+          // Check if it's an API limit error
+          if (response.status === 403 && errorData.detail && errorData.detail.status === 'voice_add_edit_limit_reached') {
+            throw new Error('API_LIMIT_REACHED');
+          }
+
+          throw new Error(errorData.detail?.message || errorData.error || 'Failed to create voice clone');
         }
-      } finally {
-        setIsCloningVoice(false);
       }
-    };
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Please try again or use the default voice.";
+
+      // Set error state for UI display instead of invasive toast
+      if (errorMessage === 'API_LIMIT_REACHED') {
+        setVoiceCloneError('Voice clone limit reached. Try again next month or use the default voice.');
+      } else {
+        setVoiceCloneError('Unable to create voice clone. You can still use the default voice.');
+      }
+    } finally {
+      setIsCloningVoice(false);
+    }
+  };
 
   /**
    * Converts summary text to speech using the appropriate TTS service
@@ -1483,13 +1669,13 @@ export default function TalkToMyself() {
         currentAudioRef.current.remove();
         currentAudioRef.current = null;
       }
-      
+
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
-      
+
       // Store reference to current audio
       currentAudioRef.current = audio;
-      
+
       audio.onended = () => {
         URL.revokeObjectURL(url);
         // Don't clear currentAudioRef - keep it for replay
@@ -1500,10 +1686,10 @@ export default function TalkToMyself() {
         currentAudioRef.current = null;
         setIsSpeaking(false);
       };
-      
+
       // Auto-play on desktop, manual play on mobile
       const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-      
+
       if (isMobile) {
         // Mobile: wait for user interaction
         console.log('Audio ready for playback - waiting for user interaction');
@@ -1538,10 +1724,10 @@ export default function TalkToMyself() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
-        
+
         console.log('Voice clone TTS response:', response.status);
-        
-        
+
+
         if (response.ok) {
           const audioBlob = await response.blob();
           console.log('Voice clone TTS response:', {
@@ -1549,7 +1735,7 @@ export default function TalkToMyself() {
             type: audioBlob.type,
             status: response.status
           });
-          
+
           if (audioBlob.size === 0) {
             console.warn('Voice clone has no audio data, falling back to default voice');
             // Don't set error - just fall through silently
@@ -1603,28 +1789,28 @@ export default function TalkToMyself() {
       setActualTTSService("browser");
       console.log('Falling back to browser TTS - actualTTSService set to browser');
       const utterance = new SpeechSynthesisUtterance(summary);
-      
+
       utterance.onend = () => setIsSpeaking(false);
       utterance.onerror = () => setIsSpeaking(false);
-      
+
       // Use a more natural voice if available
       const voices = speechSynthesis.getVoices();
-      const preferredVoice = voices.find(voice => 
-        voice.name.includes('River') || 
-        voice.name.includes('Samantha') || 
+      const preferredVoice = voices.find(voice =>
+        voice.name.includes('River') ||
+        voice.name.includes('Samantha') ||
         voice.name.includes('Alex') ||
         voice.name.includes('Google')
       );
-      
+
       if (preferredVoice) {
         utterance.voice = preferredVoice;
         console.log('Using preferred voice:', preferredVoice.name);
       }
-      
+
       window.speechSynthesis.speak(utterance);
     } else {
       // No TTS available
-        setIsSpeaking(false);
+      setIsSpeaking(false);
     }
   };
 
@@ -1649,20 +1835,20 @@ export default function TalkToMyself() {
   const stopSpeech = () => {
     // Stop browser speech synthesis
     speechSynthesis.cancel()
-    
+
     // Stop current audio element (ElevenLabs TTS)
     if (currentAudioRef.current) {
       currentAudioRef.current.pause();
       // Don't remove or clear - keep for replay
     }
-    
+
     // Also stop any other audio elements as backup
     const existingAudio = document.querySelector('audio');
     if (existingAudio) {
       existingAudio.pause();
       existingAudio.remove();
     }
-    
+
     // Reset state
     setIsSpeaking(false)
     // Don't reset isAudioReady - keep audio ready for replay
@@ -1709,14 +1895,14 @@ export default function TalkToMyself() {
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" className="w-12 h-12">
                   <defs>
                     <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                      <stop offset="0%" stopColor="#8e2de2"/>
-                      <stop offset="100%" stopColor="#f2994a"/>
+                      <stop offset="0%" stopColor="#8e2de2" />
+                      <stop offset="100%" stopColor="#f2994a" />
                     </linearGradient>
                   </defs>
-                  <rect width="100" height="100" rx="20" fill="url(#grad)"/>
-                  <rect y="50" width="100" height="1.5" fill="#fff" opacity="0.2"/>
-                  <path d="M30 20 H70 A5 5 0 0 1 75 25 V45 A5 5 0 0 1 70 50 H50 L45 60 V50 H30 A5 5 0 0 1 25 45 V25 A5 5 0 0 1 30 20 Z" fill="#fff"/>
-                  <path d="M30 80 H70 A5 5 0 0 0 75 75 V55 A5 5 0 0 0 70 50 H50 L45 40 V50 H30 A5 5 0 0 0 25 55 V75 A5 5 0 0 0 30 80 Z" fill="#fff" opacity="0.3"/>
+                  <rect width="100" height="100" rx="20" fill="url(#grad)" />
+                  <rect y="50" width="100" height="1.5" fill="#fff" opacity="0.2" />
+                  <path d="M30 20 H70 A5 5 0 0 1 75 25 V45 A5 5 0 0 1 70 50 H50 L45 60 V50 H30 A5 5 0 0 1 25 45 V25 A5 5 0 0 1 30 20 Z" fill="#fff" />
+                  <path d="M30 80 H70 A5 5 0 0 0 75 75 V55 A5 5 0 0 0 70 50 H50 L45 40 V50 H30 A5 5 0 0 0 25 55 V75 A5 5 0 0 0 30 80 Z" fill="#fff" opacity="0.3" />
                 </svg>
                 <div className="absolute -top-1 -right-1 w-4 h-4 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-full flex items-center justify-center">
                   <Sparkles className="w-2 h-2 text-white" />
@@ -1776,7 +1962,7 @@ export default function TalkToMyself() {
       <div className="min-h-screen bg-gradient-to-br from-rose-50 via-purple-50 to-indigo-100">
         <BackgroundElements />
 
-        <AppHeader 
+        <AppHeader
           isRecording={isRecording}
           isProcessing={isProcessing}
           sessionsCount={sessions.length}
@@ -1961,7 +2147,7 @@ export default function TalkToMyself() {
                               ? "Speaking your reflection..."
                               : isAudioReady
                                 ? "Your reflection is ready to play"
-                              : "Ready to listen to your voice"}
+                                : "Ready to listen to your voice"}
                       </h2>
                       <p className="text-lg text-gray-600 leading-relaxed">
                         {isRecording
@@ -1972,7 +2158,7 @@ export default function TalkToMyself() {
                               ? "Listen to your personalized reflection. Recording is paused while I'm speaking."
                               : isAudioReady
                                 ? "Click the Play button to hear your personalized reflection."
-                              : "This is your safe space. Click the microphone when you're ready to voice your thoughts, feelings, anything you want help remembering or whatever is on your mind."}
+                                : "This is your safe space. Click the microphone when you're ready to voice your thoughts, feelings, anything you want help remembering or whatever is on your mind."}
                       </p>
                     </div>
 
@@ -2005,14 +2191,14 @@ export default function TalkToMyself() {
                             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" className="w-8 h-8">
                               <defs>
                                 <linearGradient id="grad2" x1="0%" y1="0%" x2="100%" y2="100%">
-                                  <stop offset="0%" stopColor="#8e2de2"/>
-                                  <stop offset="100%" stopColor="#f2994a"/>
+                                  <stop offset="0%" stopColor="#8e2de2" />
+                                  <stop offset="100%" stopColor="#f2994a" />
                                 </linearGradient>
                               </defs>
-                              <rect width="100" height="100" rx="20" fill="url(#grad2)"/>
-                              <rect y="50" width="100" height="1.5" fill="#fff" opacity="0.2"/>
-                              <path d="M30 20 H70 A5 5 0 0 1 75 25 V45 A5 5 0 0 1 70 50 H50 L45 60 V50 H30 A5 5 0 0 1 25 45 V25 A5 5 0 0 1 30 20 Z" fill="#fff"/>
-                              <path d="M30 80 H70 A5 5 0 0 0 75 75 V55 A5 5 0 0 0 70 50 H50 L45 40 V50 H30 A5 5 0 0 0 25 55 V75 A5 5 0 0 0 30 80 Z" fill="#fff" opacity="0.3"/>
+                              <rect width="100" height="100" rx="20" fill="url(#grad2)" />
+                              <rect y="50" width="100" height="1.5" fill="#fff" opacity="0.2" />
+                              <path d="M30 20 H70 A5 5 0 0 1 75 25 V45 A5 5 0 0 1 70 50 H50 L45 60 V50 H30 A5 5 0 0 1 25 45 V25 A5 5 0 0 1 30 20 Z" fill="#fff" />
+                              <path d="M30 80 H70 A5 5 0 0 0 75 75 V55 A5 5 0 0 0 70 50 H50 L45 40 V50 H30 A5 5 0 0 0 25 55 V75 A5 5 0 0 0 30 80 Z" fill="#fff" opacity="0.3" />
                             </svg>
                           </div>
                           <div className="space-y-3">
@@ -2064,36 +2250,36 @@ export default function TalkToMyself() {
                               console.log('Playing ready audio');
                               playAudio();
                             } else {
-                            // Stop any current speech before starting new
+                              // Stop any current speech before starting new
                               console.log('Starting new speech generation');
-                            if (speechSynthesis.speaking) {
-                              speechSynthesis.cancel();
-                            }
-                            // Clear any existing audio elements
-                            const existingAudio = document.querySelector('audio');
-                            if (existingAudio) {
-                              existingAudio.pause();
-                              existingAudio.remove();
-                            }
+                              if (speechSynthesis.speaking) {
+                                speechSynthesis.cancel();
+                              }
+                              // Clear any existing audio elements
+                              const existingAudio = document.querySelector('audio');
+                              if (existingAudio) {
+                                existingAudio.pause();
+                                existingAudio.remove();
+                              }
                               // Reset speaking state and audio ready state
-                            setIsSpeaking(false);
+                              setIsSpeaking(false);
                               setIsAudioReady(false);
-                            // Start new speech
-                            speakSummary(currentSession.summary);
+                              // Start new speech
+                              speakSummary(currentSession.summary);
                             }
                           }}
                           disabled={!currentSession?.summary}
                           className={cn(
                             "flex items-center space-x-2 rounded-xl px-6 py-3 transition-all duration-300",
-                            isSpeaking 
-                              ? "bg-white/80 border-red-200 hover:bg-red-50" 
+                            isSpeaking
+                              ? "bg-white/80 border-red-200 hover:bg-red-50"
                               : "bg-white/80 border-purple-200 hover:bg-purple-50"
                           )}
                         >
                           {isSpeaking ? (
                             <MicOff className="w-5 h-5 text-red-600" />
                           ) : (
-                          <Volume2 className="w-5 h-5 text-purple-600" />
+                            <Volume2 className="w-5 h-5 text-purple-600" />
                           )}
                           <span className={cn(
                             "font-medium",
@@ -2106,14 +2292,14 @@ export default function TalkToMyself() {
                         {/* Voice Clone Toggle */}
                         <Tooltip>
                           <TooltipTrigger asChild>
-                          <Button
-                            variant="outline"
+                            <Button
+                              variant="outline"
                               onClick={handleVoiceClone}
                               disabled={isCloningVoice}
                               className={cn(
                                 "flex items-center space-x-2 rounded-xl px-6 py-3 transition-all duration-300",
-                                hasVoiceClone 
-                                  ? "bg-green-50 border-green-200 hover:bg-green-100" 
+                                hasVoiceClone
+                                  ? "bg-green-50 border-green-200 hover:bg-green-100"
                                   : "bg-white/80 border-blue-200 hover:bg-blue-50"
                               )}
                             >
@@ -2126,23 +2312,23 @@ export default function TalkToMyself() {
                                 <>
                                   <Mic className="w-5 h-5 text-green-600" />
                                   <span className="text-green-600 font-medium">Replace Voice Clone</span>
-                              </>
-                            ) : (
-                              <>
+                                </>
+                              ) : (
+                                <>
                                   <Mic className="w-5 h-5 text-blue-600" />
                                   <span className="text-blue-600 font-medium">Clone Voice</span>
-                              </>
-                            )}
-                          </Button>
+                                </>
+                              )}
+                            </Button>
                           </TooltipTrigger>
                           <TooltipContent>
-                            {hasVoiceClone 
+                            {hasVoiceClone
                               ? "Replace your existing voice clone with a new version using the current audio recording. This will create a fresh voice clone with the latest audio data."
                               : "Clone your voice to hear reflections in your own voice. Audio is processed by ElevenLabs and not stored permanently."
                             }
                           </TooltipContent>
                         </Tooltip>
-                        
+
                         {/* Voice Clone Status Display */}
                         {hasVoiceClone && userVoiceCloneId && (
                           <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded-lg text-sm text-green-800">
@@ -2162,7 +2348,7 @@ export default function TalkToMyself() {
                             </div>
                           </div>
                         )}
-                        
+
                         {/* Voice Clone Error Display - only show when there's an actual error */}
                         {voiceCloneError && !hasVoiceClone && (
                           <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-800">
@@ -2174,15 +2360,15 @@ export default function TalkToMyself() {
                         {hasVoiceClone && userVoiceCloneId && (
                           <Tooltip>
                             <TooltipTrigger asChild>
-                          <Button
-                            variant="outline"
+                              <Button
+                                variant="outline"
                                 onClick={handleDeleteVoiceClone}
                                 disabled={false}
-                            className="flex items-center space-x-2 bg-white/80 border-red-200 hover:bg-red-50 rounded-xl px-6 py-3"
-                          >
-                            <MicOff className="w-5 h-5 text-red-600" />
+                                className="flex items-center space-x-2 bg-white/80 border-red-200 hover:bg-red-50 rounded-xl px-6 py-3"
+                              >
+                                <MicOff className="w-5 h-5 text-red-600" />
                                 <span className="text-red-600 font-medium">Delete Clone</span>
-                          </Button>
+                              </Button>
                             </TooltipTrigger>
                             <TooltipContent>
                               Delete your voice clone and return to using the default voice
@@ -2214,8 +2400,8 @@ export default function TalkToMyself() {
                     <Badge variant="secondary">
                       TTS: {actualTTSService === "elevenlabs" ? "ElevenLabs"
                         : actualTTSService === "hume" ? "Hume.ai"
-                        : actualTTSService === "google" ? "Google TTS"
-                        : "Browser"}
+                          : actualTTSService === "google" ? "Google TTS"
+                            : "Browser"}
                       {hasVoiceClone && userVoiceCloneId && (
                         <> - Your Voice Clone</>
                       )}
@@ -2240,169 +2426,107 @@ export default function TalkToMyself() {
             {currentSession && (
               <TabsContent value="analysis" className="space-y-8">
                 <div className="grid gap-8">
-                  {/* Emotions */}
+                  {/* 1. Text-Based Emotion Analysis (HuggingFace) */}
                   <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
-                    <CardHeader className="bg-gradient-to-r from-purple-50 to-pink-50 p-8">
+                    <CardHeader className="bg-gradient-to-r from-blue-50 to-indigo-50 p-8">
                       <CardTitle className="text-2xl text-gray-800 flex items-center space-x-3">
-                        <div className="w-8 h-8 bg-gradient-to-br from-purple-400 to-pink-500 rounded-lg flex items-center justify-center">
-                          <Sparkles className="w-4 h-4 text-white" />
+                        <div className="w-8 h-8 bg-gradient-to-br from-blue-400 to-indigo-500 rounded-lg flex items-center justify-center">
+                          <FileText className="w-4 h-4 text-white" />
                         </div>
-                        <span>Emotional Landscape</span>
+                        <span>Text-Based Emotion Analysis</span>
                       </CardTitle>
                       <CardDescription className="text-gray-600 text-lg">
-                        {serviceStatus.huggingface
-                          ? "Hybrid emotion analysis combining text and audio models for maximum accuracy"
-                          : <span className="text-orange-600 font-semibold">(Demo) Fallback emotion analysis – not real AI, for demonstration only</span>}
+                        {/* [CHANGE: 2025-12-14] Updated label for clarity on overlapping emotions */}
+                        Top 5 detected emotions from your words (confidence scores - emotions can overlap)
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="p-8">
-                      {/* Source Legend */}
-                      <div className="mb-6 p-4 bg-gradient-to-r from-gray-50 to-blue-50 rounded-xl border border-gray-200">
-                        <h4 className="text-sm font-semibold text-gray-700 mb-3">Analysis Sources:</h4>
-                        <div className="flex flex-wrap gap-4 text-xs">
-                          <div className="flex items-center space-x-2">
-                            <Badge variant="secondary" className="bg-green-100 text-green-700 border-green-200">
-                              <div className="flex items-center space-x-1">
-                                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                                <span>Hybrid</span>
-                              </div>
-                            </Badge>
-                            <span className="text-gray-600">Both text & audio analysis</span>
-                          </div>
-                          <div className="flex items-center space-x-2">
-                            <Badge variant="secondary" className="bg-blue-100 text-blue-700 border-blue-200">
-                              <div className="flex items-center space-x-1">
-                                <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                                <span>Text</span>
-                              </div>
-                            </Badge>
-                            <span className="text-gray-600">Word meaning analysis</span>
-                          </div>
-                          <div className="flex items-center space-x-2">
-                            <Badge variant="secondary" className="bg-orange-100 text-orange-700 border-orange-200">
-                              <div className="flex items-center space-x-1">
-                                <div className="w-2 h-2 bg-orange-500 rounded-full"></div>
-                                <span>Audio</span>
-                              </div>
-                            </Badge>
-                            <span className="text-gray-600">Voice tone analysis</span>
-                          </div>
-                        </div>
-                      </div>
-                      {currentSession.emotions && currentSession.emotions.length > 0 ? (
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                          {currentSession.emotions.map((emotion, index) => {
-                            // Determine source information
-                            const sources = (emotion as any).sources || ['text']; // Fallback for old data
-                            const isHybrid = sources.includes('text') && sources.includes('audio');
-                            const isTextOnly = sources.includes('text') && !sources.includes('audio');
-                            const isAudioOnly = sources.includes('audio') && !sources.includes('text');
-                            
-                            // Create tooltip content
-                            const getTooltipContent = () => {
-                              if (isHybrid) {
-                                return "This emotion was detected by both text analysis (analyzing your words) and audio analysis (analyzing your voice tone). This cross-referenced result has higher confidence.";
-                              } else if (isTextOnly) {
-                                return "This emotion was detected by text analysis, which analyzes the meaning and sentiment of your spoken words using HuggingFace's RoBERTa model.";
-                              } else if (isAudioOnly) {
-                                return "This emotion was detected by audio analysis, which analyzes your voice tone, pitch, and inflection using HuggingFace's Wav2Vec2 model.";
-                              }
-                              return "Emotion analysis result";
-                            };
-
-                            // Create source badge
-                            const getSourceBadge = () => {
-                              if (isHybrid) {
-                                return (
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <Badge variant="secondary" className="bg-green-100 text-green-700 border-green-200">
-                                        <div className="flex items-center space-x-1">
-                                          <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                                          <span>Hybrid</span>
-                                        </div>
-                                      </Badge>
-                                    </TooltipTrigger>
-                                    <TooltipContent>
-                                      <p>{getTooltipContent()}</p>
-                                    </TooltipContent>
-                                  </Tooltip>
-                                );
-                              } else if (isTextOnly) {
-                                return (
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <Badge variant="secondary" className="bg-blue-100 text-blue-700 border-blue-200">
-                                        <div className="flex items-center space-x-1">
-                                          <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                                          <span>Text</span>
-                                        </div>
-                                      </Badge>
-                                    </TooltipTrigger>
-                                    <TooltipContent>
-                                      <p>{getTooltipContent()}</p>
-                                    </TooltipContent>
-                                  </Tooltip>
-                                );
-                              } else if (isAudioOnly) {
-                                return (
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <Badge variant="secondary" className="bg-orange-100 text-orange-700 border-orange-200">
-                                        <div className="flex items-center space-x-1">
-                                          <div className="w-2 h-2 bg-orange-500 rounded-full"></div>
-                                          <span>Audio</span>
-                                        </div>
-                                      </Badge>
-                                    </TooltipTrigger>
-                                    <TooltipContent>
-                                      <p>{getTooltipContent()}</p>
-                                    </TooltipContent>
-                                  </Tooltip>
-                                );
-                              }
-                              return null;
-                            };
-
-                            return (
-                          <div
-                            key={index}
-                            className="bg-gradient-to-br from-purple-50 via-pink-50 to-indigo-50 rounded-2xl p-6 border border-purple-100 hover:shadow-lg transition-all duration-300"
-                          >
-                            <div className="flex items-center justify-between mb-4">
-                              <h3 className="font-semibold text-gray-800 text-lg">{emotion.emotion}</h3>
-                                  <div className="flex items-center space-x-2">
-                                    {getSourceBadge()}
-                              <Badge variant="secondary" className="bg-purple-100 text-purple-700">
-                                {(emotion.confidence * 100).toFixed(0)}%
-                              </Badge>
-                                  </div>
-                            </div>
-                            <div className="w-full bg-white/60 rounded-full h-3 overflow-hidden">
+                      {(() => {
+                        const textEmotions = (currentSession.emotions || []).filter(e => e.sources?.includes('text'));
+                        console.log("UI Rendering - Text Emotions:", textEmotions);
+                        console.log("UI Rendering - All Emotions:", currentSession.emotions);
+                        return textEmotions.length > 0 ? (
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                            {textEmotions.map((emotion, index) => (
                               <div
-                                className="bg-gradient-to-r from-purple-400 to-pink-500 h-3 rounded-full transition-all duration-1000 ease-out"
-                                style={{ width: `${emotion.confidence * 100}%` }}
-                              ></div>
-                            </div>
+                                key={index}
+                                className="bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 rounded-2xl p-6 border border-blue-100 hover:shadow-lg transition-all duration-300"
+                              >
+                                <div className="flex items-center justify-between mb-4">
+                                  <h3 className="font-semibold text-gray-800 text-lg">{emotion.emotion}</h3>
+                                  <Badge variant="secondary" className="bg-blue-100 text-blue-700">
+                                    {(emotion.confidence * 100).toFixed(0)}%
+                                  </Badge>
+                                </div>
+                                <div className="w-full bg-white/60 rounded-full h-3 overflow-hidden">
+                                  <div
+                                    className="bg-gradient-to-r from-blue-400 to-indigo-500 h-3 rounded-full transition-all duration-1000 ease-out"
+                                    style={{ width: `${emotion.confidence * 100}%` }}
+                                  ></div>
+                                </div>
+                              </div>
+                            ))}
                           </div>
-                            );
-                          })}
-                      </div>
-                      ) : (
-                        <div className="flex flex-col items-center justify-center py-12 text-center">
-                          <div className="w-16 h-16 bg-gradient-to-br from-gray-100 to-gray-200 rounded-full flex items-center justify-center mb-4">
-                            <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.172 16.172a4 4 0 015.656 0M9 12h6m-6-4h6m2 5.291A7.962 7.962 0 0112 15c-2.34 0-4.29-1.009-5.824-2.709" />
-                            </svg>
+
+                        ) : (
+                          <div className="flex items-center justify-center py-4 bg-gray-50/50 rounded-xl border border-dashed border-gray-200">
+                            <p className="text-gray-400 text-sm">Text emotion analysis unavailable</p>
                           </div>
-                          <h3 className="text-lg font-semibold text-gray-700 mb-2">Emotion Analysis Unavailable</h3>
-                          <p className="text-gray-500">Emotion analysis failed. This could be due to network issues or service limitations.</p>
-                        </div>
-                      )}
+                        )
+                      })()}
                     </CardContent>
                   </Card>
 
-                  {/* Voice Characteristics (DSP) */}
+                  {/* 2. Audio-Based Emotion Analysis (Valence) */}
+                  <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
+                    <CardHeader className="bg-gradient-to-r from-orange-50 to-red-50 p-8">
+                      <CardTitle className="text-2xl text-gray-800 flex items-center space-x-3">
+                        <div className="w-8 h-8 bg-gradient-to-br from-orange-400 to-red-500 rounded-lg flex items-center justify-center">
+                          <Waves className="w-4 h-4 text-white" />
+                        </div>
+                        <span>Audio-Based Emotion Analysis</span>
+                      </CardTitle>
+                      <CardDescription className="text-gray-600 text-lg">
+                        {/* [CHANGE: 2025-12-14] Updated label for clarity on probability distribution (adds to 100%) */}
+                        Top 3 emotions from voice tone using <strong>Valence AI</strong> (probability distribution - adds to 100%)
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="p-8">
+                      {(() => {
+                        const audioEmotions = (currentSession.emotions || []).filter(e => e.sources?.includes('audio-valence'));
+                        return audioEmotions.length > 0 ? (
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            {audioEmotions.slice(0, 3).map((emotion, index) => (
+                              <div
+                                key={index}
+                                className="bg-gradient-to-br from-orange-50 via-red-50 to-pink-50 rounded-2xl p-6 border border-orange-100 hover:shadow-lg transition-all duration-300"
+                              >
+                                <div className="flex items-center justify-between mb-4">
+                                  <h3 className="font-semibold text-gray-800 text-lg">{emotion.emotion}</h3>
+                                  <Badge variant="secondary" className="bg-orange-100 text-orange-700">
+                                    {(emotion.confidence * 100).toFixed(0)}%
+                                  </Badge>
+                                </div>
+                                <div className="w-full bg-white/60 rounded-full h-3 overflow-hidden">
+                                  <div
+                                    className="bg-gradient-to-r from-orange-400 to-red-500 h-3 rounded-full transition-all duration-1000 ease-out"
+                                    style={{ width: `${emotion.confidence * 100}%` }}
+                                  ></div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                        ) : (
+                          <div className="flex items-center justify-center py-4 bg-gray-50/50 rounded-xl border border-dashed border-gray-200">
+                            <p className="text-gray-400 text-sm">Audio analysis unavailable</p>
+                          </div>
+                        )
+                      })()}
+                    </CardContent>
+                  </Card>
+
+                  {/* 3. Voice Characteristics (DSP) */}
                   <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
                     <CardHeader className="bg-gradient-to-r from-indigo-50 to-purple-50 p-8">
                       <CardTitle className="text-2xl text-gray-800 flex items-center space-x-3">
@@ -2424,64 +2548,64 @@ export default function TalkToMyself() {
                           </div>
                         </div>
                       ) : (
-                      <div className="grid grid-cols-2 gap-8">
-                        <div className="space-y-6">
-                          <div className="flex justify-between items-center p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-100">
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <span className="text-gray-700 font-medium underline decoration-dotted cursor-help">Tone</span>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                Tone is estimated using the zero crossing rate (ZCR) of your audio. Higher ZCR means a brighter tone, lower means a warmer tone.
-                              </TooltipContent>
-                            </Tooltip>
-                            <Badge className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
-                              {currentSession.vocalCharacteristics.tone}
-                            </Badge>
+                        <div className="grid grid-cols-2 gap-8">
+                          <div className="space-y-6">
+                            <div className="flex justify-between items-center p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-100">
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span className="text-gray-700 font-medium underline decoration-dotted cursor-help">Tone</span>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  Tone is estimated using the zero crossing rate (ZCR) of your audio. Higher ZCR means a brighter tone, lower means a warmer tone.
+                                </TooltipContent>
+                              </Tooltip>
+                              <Badge className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
+                                {currentSession.vocalCharacteristics.tone}
+                              </Badge>
+                            </div>
+                            <div className="flex justify-between items-center p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-100">
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span className="text-gray-700 font-medium underline decoration-dotted cursor-help">Pace</span>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  Pace is estimated by analyzing the average length of speech segments above a silence threshold. Longer segments mean a more deliberate pace.
+                                </TooltipContent>
+                              </Tooltip>
+                              <Badge className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
+                                {currentSession.vocalCharacteristics.pace}
+                              </Badge>
+                            </div>
                           </div>
-                          <div className="flex justify-between items-center p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-100">
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <span className="text-gray-700 font-medium underline decoration-dotted cursor-help">Pace</span>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                Pace is estimated by analyzing the average length of speech segments above a silence threshold. Longer segments mean a more deliberate pace.
-                              </TooltipContent>
-                            </Tooltip>
-                            <Badge className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
-                              {currentSession.vocalCharacteristics.pace}
-                            </Badge>
+                          <div className="space-y-6">
+                            <div className="flex justify-between items-center p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-100">
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span className="text-gray-700 font-medium underline decoration-dotted cursor-help">Pitch</span>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  Pitch is not directly measured, but inferred from the balance of the audio waveform and articulation. This is a rough estimate.
+                                </TooltipContent>
+                              </Tooltip>
+                              <Badge className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
+                                {currentSession.vocalCharacteristics.pitch}
+                              </Badge>
+                            </div>
+                            <div className="flex justify-between items-center p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-100">
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span className="text-gray-700 font-medium underline decoration-dotted cursor-help">Volume</span>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  Volume is estimated using the root mean square (RMS) energy of your audio. Higher RMS means a stronger volume.
+                                </TooltipContent>
+                              </Tooltip>
+                              <Badge className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
+                                {currentSession.vocalCharacteristics.volume}
+                              </Badge>
+                            </div>
                           </div>
                         </div>
-                        <div className="space-y-6">
-                          <div className="flex justify-between items-center p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-100">
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <span className="text-gray-700 font-medium underline decoration-dotted cursor-help">Pitch</span>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                Pitch is not directly measured, but inferred from the balance of the audio waveform and articulation. This is a rough estimate.
-                              </TooltipContent>
-                            </Tooltip>
-                            <Badge className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
-                              {currentSession.vocalCharacteristics.pitch}
-                            </Badge>
-                          </div>
-                          <div className="flex justify-between items-center p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-100">
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <span className="text-gray-700 font-medium underline decoration-dotted cursor-help">Volume</span>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                Volume is estimated using the root mean square (RMS) energy of your audio. Higher RMS means a stronger volume.
-                              </TooltipContent>
-                            </Tooltip>
-                            <Badge className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
-                              {currentSession.vocalCharacteristics.volume}
-                            </Badge>
-                          </div>
-                        </div>
-                      </div>
                       )}
                     </CardContent>
                   </Card>
@@ -2585,7 +2709,7 @@ export default function TalkToMyself() {
                               </div>
                             </div>
                             <div className="flex flex-wrap gap-2 ml-6">
-                              {session.emotions.slice(0, 3).map((emotion, emotionIndex) => (
+                              {(session.emotions || []).slice(0, 3).map((emotion, emotionIndex) => (
                                 <Badge
                                   key={emotionIndex}
                                   variant="secondary"
@@ -2600,14 +2724,14 @@ export default function TalkToMyself() {
                             {(() => {
                               const transcriptWords = calculateWordCount(session.transcript || '');
                               const summaryWords = calculateWordCount(session.summary || '');
-                              
+
                               // Use the stored recording duration from the red bubble timer
                               const duration = session.recordingDuration || 0;
-                              
+
                               if (duration === 0) {
                                 return `${transcriptWords} words | ${summaryWords} words`;
                               }
-                              
+
                               const m = Math.floor(duration / 60);
                               const s = Math.round(duration % 60);
                               return `${transcriptWords} words | ${summaryWords} words | ${m}:${s.toString().padStart(2, '0')} min`;
@@ -2624,89 +2748,89 @@ export default function TalkToMyself() {
             {/* Settings Tab - Admin Only */}
             {isAdmin && (
               <TabsContent value="settings" className="space-y-8">
-              <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
-                <CardHeader className="bg-gradient-to-r from-blue-50 to-indigo-50 p-8">
-                  <CardTitle className="text-2xl text-gray-800 flex items-center space-x-3">
-                    <div className="w-8 h-8 bg-gradient-to-br from-blue-400 to-indigo-500 rounded-lg flex items-center justify-center flex-shrink-0">
-                      <Settings className="w-4 h-4 text-white" />
-                    </div>
-                    <span>Admin Settings</span>
-                  </CardTitle>
-                  <CardDescription className="text-gray-600 text-lg">
-                    Configure AI service preferences and debug tools. <br />
-                    <strong>Note:</strong> API keys are managed securely in Vercel environment variables and are never exposed to the browser or stored in the UI.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="p-8 space-y-12">
-                  {/* Service Preferences Section */}
-                  <div className="space-y-6">
-                    <h3 className="text-xl font-semibold text-gray-800">Service Preferences</h3>
-                    <div className="flex flex-col gap-4">
-                      <label className="font-medium text-gray-700">Summary Service</label>
-                      <select
-                        className="w-full max-w-xs p-2 border rounded"
-                        value={globalSettings?.summary_service || ''}
-                        onChange={e => handleGlobalSettingsChange({ summary_service: e.target.value })}
-                      >
-                        <option value="openai">OpenAI</option>
-                        <option value="gemini">Google Gemini</option>
-                        <option value="claude">Anthropic Claude</option>
-                      </select>
-                      <div className="text-sm text-gray-500">Current: {globalSettings?.summary_service}</div>
+                <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
+                  <CardHeader className="bg-gradient-to-r from-blue-50 to-indigo-50 p-8">
+                    <CardTitle className="text-2xl text-gray-800 flex items-center space-x-3">
+                      <div className="w-8 h-8 bg-gradient-to-br from-blue-400 to-indigo-500 rounded-lg flex items-center justify-center flex-shrink-0">
+                        <Settings className="w-4 h-4 text-white" />
                       </div>
-                    <div className="flex flex-col gap-4 mt-6">
-                      <label className="font-medium text-gray-700">TTS (Voice) Service</label>
+                      <span>Admin Settings</span>
+                    </CardTitle>
+                    <CardDescription className="text-gray-600 text-lg">
+                      Configure AI service preferences and debug tools. <br />
+                      <strong>Note:</strong> API keys are managed securely in Vercel environment variables and are never exposed to the browser or stored in the UI.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="p-8 space-y-12">
+                    {/* Service Preferences Section */}
+                    <div className="space-y-6">
+                      <h3 className="text-xl font-semibold text-gray-800">Service Preferences</h3>
+                      <div className="flex flex-col gap-4">
+                        <label className="font-medium text-gray-700">Summary Service</label>
                         <select
-                        className="w-full max-w-xs p-2 border rounded"
-                        value={globalSettings?.tts_service || ''}
-                        onChange={e => handleGlobalSettingsChange({ tts_service: e.target.value })}
-                      >
-                        <option value="browser">Browser (System Voice)</option>
-                        <option value="elevenlabs">ElevenLabs</option>
-                        <option value="google">Google TTS</option>
-                        <option value="hume">Hume.ai</option>
+                          className="w-full max-w-xs p-2 border rounded"
+                          value={globalSettings?.summary_service || ''}
+                          onChange={e => handleGlobalSettingsChange({ summary_service: e.target.value })}
+                        >
+                          <option value="openai">OpenAI</option>
+                          <option value="gemini">Google Gemini</option>
+                          <option value="claude">Anthropic Claude</option>
                         </select>
-                      <div className="text-sm text-gray-500">Current: {globalSettings?.tts_service}</div>
+                        <div className="text-sm text-gray-500">Current: {globalSettings?.summary_service}</div>
                       </div>
-                    {/* Add similar controls for elevenlabs_voice_id, google_lang, google_gender, hume_voice if needed */}
-                    <label>ElevenLabs Voice</label>
-                            <select
-                      value={globalSettings?.elevenlabs_voice_id || ''}
-                      onChange={e => handleGlobalSettingsChange({ elevenlabs_voice_id: e.target.value })}
-                            >
-                              {elevenLabsVoices.map(v => (
-                                <option key={v.id} value={v.id}>{v.name}</option>
-                              ))}
-                            </select>
-                    <label>Hume Voice</label>
-                    <input
-                      type="text"
-                      value={globalSettings?.hume_voice || ''}
-                      onChange={e => handleGlobalSettingsChange({ hume_voice: e.target.value })}
-                    />
-                    <label>Google TTS Language</label>
-                    <input
-                      type="text"
-                      value={globalSettings?.google_lang || ''}
-                      onChange={e => handleGlobalSettingsChange({ google_lang: e.target.value })}
-                    />
-                    <label>Google TTS Gender</label>
-                            <select
-                      value={globalSettings?.google_gender || ''}
-                      onChange={e => handleGlobalSettingsChange({ google_gender: e.target.value })}
-                            >
-                              <option value="FEMALE">Female</option>
-                              <option value="MALE">Male</option>
-                            </select>
-                          </div>
-                  {/* Service Status Section */}
-                  <div className="space-y-6">
-                    <h3 className="text-xl font-semibold text-gray-800">Service Status</h3>
-                    <ServiceStatusAndTestTools />
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
+                      <div className="flex flex-col gap-4 mt-6">
+                        <label className="font-medium text-gray-700">TTS (Voice) Service</label>
+                        <select
+                          className="w-full max-w-xs p-2 border rounded"
+                          value={globalSettings?.tts_service || ''}
+                          onChange={e => handleGlobalSettingsChange({ tts_service: e.target.value })}
+                        >
+                          <option value="browser">Browser (System Voice)</option>
+                          <option value="elevenlabs">ElevenLabs</option>
+                          <option value="google">Google TTS</option>
+                          <option value="hume">Hume.ai</option>
+                        </select>
+                        <div className="text-sm text-gray-500">Current: {globalSettings?.tts_service}</div>
+                      </div>
+                      {/* Add similar controls for elevenlabs_voice_id, google_lang, google_gender, hume_voice if needed */}
+                      <label>ElevenLabs Voice</label>
+                      <select
+                        value={globalSettings?.elevenlabs_voice_id || ''}
+                        onChange={e => handleGlobalSettingsChange({ elevenlabs_voice_id: e.target.value })}
+                      >
+                        {elevenLabsVoices.map(v => (
+                          <option key={v.id} value={v.id}>{v.name}</option>
+                        ))}
+                      </select>
+                      <label>Hume Voice</label>
+                      <input
+                        type="text"
+                        value={globalSettings?.hume_voice || ''}
+                        onChange={e => handleGlobalSettingsChange({ hume_voice: e.target.value })}
+                      />
+                      <label>Google TTS Language</label>
+                      <input
+                        type="text"
+                        value={globalSettings?.google_lang || ''}
+                        onChange={e => handleGlobalSettingsChange({ google_lang: e.target.value })}
+                      />
+                      <label>Google TTS Gender</label>
+                      <select
+                        value={globalSettings?.google_gender || ''}
+                        onChange={e => handleGlobalSettingsChange({ google_gender: e.target.value })}
+                      >
+                        <option value="FEMALE">Female</option>
+                        <option value="MALE">Male</option>
+                      </select>
+                    </div>
+                    {/* Service Status Section */}
+                    <div className="space-y-6">
+                      <h3 className="text-xl font-semibold text-gray-800">Service Status</h3>
+                      <ServiceStatusAndTestTools />
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
             )}
 
             {/* About Tab */}
@@ -2726,7 +2850,7 @@ export default function TalkToMyself() {
                     <p className="mb-6">
                       I'm obsessed with voice. Helping my daughter find hers pushed me to model trusting my own. By speaking before self-censoring kicks in, I can hear what's true for me and gain confidence in organizing my thoughts in real time.
                     </p>
-                    
+
                     <p className="mb-8">
                       We live in a flood of news, feeds, and opinions. I'm not trying to shut the world out; I'm choosing moments to tune in. Emotional Mirror gives me a protected space to be 100% present with myself, so I can declutter what's already inside; truths, gifts, and realities, and be present in the world with more intention and calm.
                     </p>
@@ -2783,8 +2907,8 @@ export default function TalkToMyself() {
                   <div className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-2xl p-6 text-center">
                     <p className="text-gray-700 leading-relaxed">
                       Share any comments, feedback or hopes via voice or text to{" "}
-                      <a 
-                        href="mailto:hit.neil.up@gmail.com" 
+                      <a
+                        href="mailto:hit.neil.up@gmail.com"
                         className="text-purple-600 hover:text-purple-800 font-medium underline"
                       >
                         hit.neil.up@gmail.com
@@ -2795,9 +2919,9 @@ export default function TalkToMyself() {
               </Card>
             </TabsContent>
           </Tabs>
-        </div>
-      </div>
-    </TooltipProvider>
+        </div >
+      </div >
+    </TooltipProvider >
   )
 }
 
@@ -2873,7 +2997,7 @@ function ServiceStatusAndTestTools() {
     <div className="space-y-4">
       <div>
         <strong>Instructions:</strong> Use the buttons below to check which AI services are up and test their connectivity. If a service fails, check your Vercel environment variables and quotas.
-                        </div>
+      </div>
       {loading ? (
         <div>Loading service status...</div>
       ) : (
@@ -2887,15 +3011,15 @@ function ServiceStatusAndTestTools() {
                     {status[service.key] ? "Up" : "Down"}
                   </span>
                 )}
-                          </div>
+              </div>
               <div className="space-y-2">
-              <button
+                <button
                   className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 w-full"
-                onClick={() => handleTest(service)}
-                disabled={testLoading[service.key]}
-              >
-                {testLoading[service.key] ? "Testing..." : "Test API"}
-              </button>
+                  onClick={() => handleTest(service)}
+                  disabled={testLoading[service.key]}
+                >
+                  {testLoading[service.key] ? "Testing..." : "Test API"}
+                </button>
                 {service.key === "gemini" && (
                   <button
                     className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50 w-full"
@@ -2909,19 +3033,19 @@ function ServiceStatusAndTestTools() {
               {testResults[service.key] && (
                 <div className="mt-2 text-xs text-gray-700 break-all">
                   {testResults[service.key]}
-                          </div>
+                </div>
               )}
               {service.key === "gemini" && testResults["gemini-models"] && (
                 <div className="mt-2 text-xs text-gray-700 break-all">
                   <strong>Available Models:</strong>
                   <pre className="whitespace-pre-wrap">{testResults["gemini-models"]}</pre>
                 </div>
-                        )}
-                      </div>
+              )}
+            </div>
           ))}
-                    </div>
-            )}
         </div>
+      )}
+    </div>
   );
 }
 

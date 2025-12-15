@@ -32,18 +32,18 @@ export async function POST(request: Request) {
         .select('*')
         .eq('user_id', userId)
         .order('created_at', { ascending: false });
-      
+
       if (error) {
         console.error('Supabase query error:', error);
         return Response.json({ error: error.message }, { status: 500 });
       }
-      
+
       console.log('Found reflections:', data?.length || 0);
       if (data && data.length > 0) {
         console.log('First reflection:', data[0]);
         console.log('Last reflection:', data[data.length - 1]);
       }
-      
+
       return Response.json({ reflections: data || [] });
     }
 
@@ -69,9 +69,7 @@ export async function POST(request: Request) {
       summary_service_used: body.summary_service_used || null,
     };
     console.log('Inserting into Supabase:', JSON.stringify(insertData, null, 2));
-    console.log('Recording duration being inserted:', recording_duration);
-    console.log('Recording duration type:', typeof recording_duration);
-    
+
     const { error } = await supabase.from('reflections').insert([insertData]);
 
     if (error) {
@@ -79,13 +77,14 @@ export async function POST(request: Request) {
       console.error('Supabase insert error:', error);
       return Response.json({ error: error.message }, { status: 500 });
     }
-    
+
     console.log('Successfully inserted reflection into Supabase');
 
     // Success response
     return Response.json({ success: true });
   } catch (error) {
     // Catch-all error handler
+    console.error('API Error:', error);
     return Response.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
   }
-} 
+}
