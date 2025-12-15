@@ -523,11 +523,15 @@ export default function TalkToMyself() {
     console.log('requestMicrophoneAccess called, current hasPermission:', hasPermission);
     setIsRequestingMic(true);
     setMicrophoneError(null);
+
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setMicrophoneError("Microphone access is not supported on this device or browser. Please use the latest version of Safari or Chrome on iOS/Android, or try on desktop.");
+      const errorMsg = "Microphone access is not supported on this device or browser. Please use the latest version of Safari or Chrome on iOS/Android, or try on desktop.";
+      console.error(errorMsg);
+      setMicrophoneError(errorMsg);
       setIsRequestingMic(false);
       return;
     }
+
     navigator.mediaDevices.getUserMedia({ audio: true })
       .then((stream: MediaStream) => {
         console.log('Microphone access granted, setting up stream');
@@ -539,7 +543,8 @@ export default function TalkToMyself() {
       })
       .catch((err) => {
         console.error('Microphone access denied:', err);
-        setMicrophoneError("Microphone access denied or unavailable. Please check your browser settings and try again.");
+        const errorMsg = "Microphone access denied or unavailable. Please check your browser settings and try again.";
+        setMicrophoneError(errorMsg);
         setIsRequestingMic(false);
       });
   };
@@ -950,7 +955,10 @@ export default function TalkToMyself() {
       console.log(`Essential processing completed in ${processingTime}ms`);
 
       // Start emotion analysis in background - not needed for immediate user experience
-      const emotionPromise = analyzeEmotions(transcript, audioBlob).catch(console.error);
+      const emotionPromise = analyzeEmotions(transcript, audioBlob).catch((err) => {
+        console.error("Emotion analysis failed:", err);
+        return []; // Return empty array instead of undefined
+      });
 
       console.log("Vocal characteristics:", vocalCharacteristics);
 
@@ -1234,6 +1242,157 @@ export default function TalkToMyself() {
     }
   }
 
+  // [CHANGE: 2025-12-14] Restored client-side audio preprocessing.
+  // DESCRIPTION: Chrome MediaRecorder produces 'audio/webm' (Opus) by default.
+  // The Web Audio API's decodeAudioData() method CANNOT decode Opus in some contexts or if header is incomplete.
+  // However, we successfully use it here to decode the recording and re-encode as linear PCM WAV.
+  //
+  // REASON: Valence API requires 'audio/wav' (Pulse Code Modulation). Sending WebM directly causes 500 Error.
+  // We manually construct a WAV header and send raw PCM data.
+  //
+  // RISK: Client-side processing consumes CPU and adds slight latency before API call.
+  // DEBT: Manual WAV header construction (`audioBufferToWav`) is verbose. Could be replaced by a library.
+  //
+  // Preprocess audio for Valence API requirements (44.1kHz, stereo, 5-30s)
+  const preprocessAudioForValence = async (audioBlob: Blob): Promise<Blob> => {
+    try {
+      console.log('Starting audio preprocessing for Valence...');
+      console.log('Input blob:', { size: audioBlob.size, type: audioBlob.type });
+
+      const audioContext = new AudioContext({ sampleRate: 44100 });
+      const arrayBuffer = await audioBlob.arrayBuffer();
+      console.log('ArrayBuffer size:', arrayBuffer.byteLength);
+
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      console.log('Decoded audio:', {
+        duration: audioBuffer.duration,
+        channels: audioBuffer.numberOfChannels,
+        sampleRate: audioBuffer.sampleRate,
+        length: audioBuffer.length
+      });
+
+      // Valence discrete API has limits: minimum 5s, maximum ~30s
+      const minSamples = 44100 * 5; // 5 seconds
+      const maxSamples = 44100 * 30; // 30 seconds
+
+      // Truncate if too long
+      let processedBuffer = audioBuffer;
+      if (audioBuffer.length > maxSamples) {
+        console.log(`Truncating audio from ${audioBuffer.duration}s to 30s...`);
+        processedBuffer = audioContext.createBuffer(
+          audioBuffer.numberOfChannels,
+          maxSamples,
+          44100
+        );
+        for (let channel = 0; channel < audioBuffer.numberOfChannels; channel++) {
+          const sourceData = audioBuffer.getChannelData(channel);
+          const targetData = processedBuffer.getChannelData(channel);
+          targetData.set(sourceData.subarray(0, maxSamples));
+        }
+      }
+
+      // Ensure stereo (2 channels)
+      if (processedBuffer.numberOfChannels === 1) {
+        console.log('Converting mono to stereo...');
+        const stereoBuffer = audioContext.createBuffer(
+          2,
+          processedBuffer.length,
+          44100
+        );
+        const monoData = processedBuffer.getChannelData(0);
+        stereoBuffer.copyToChannel(monoData, 0);
+        stereoBuffer.copyToChannel(monoData, 1);
+        processedBuffer = stereoBuffer;
+      }
+
+      // Ensure minimum 5 seconds duration
+      let finalBuffer = processedBuffer;
+      if (processedBuffer.length < minSamples) {
+        console.log(`Padding audio from ${processedBuffer.duration}s to 5s...`);
+        finalBuffer = audioContext.createBuffer(
+          2,
+          minSamples,
+          44100
+        );
+        for (let channel = 0; channel < 2; channel++) {
+          const sourceData = processedBuffer.getChannelData(channel);
+          const targetData = finalBuffer.getChannelData(channel);
+          targetData.set(sourceData);
+          // Rest is already zeros (silence)
+        }
+      }
+
+      console.log('Converting to WAV format...');
+      // Convert to WAV format
+      const wavBlob = audioBufferToWav(finalBuffer);
+      console.log('WAV blob created:', { size: wavBlob.size, type: wavBlob.type });
+
+      await audioContext.close();
+
+      return wavBlob;
+    } catch (error) {
+      console.error("Audio preprocessing error:", error);
+      console.error("Error details:", error instanceof Error ? error.message : String(error));
+      // Return original blob if preprocessing fails
+      return audioBlob;
+    }
+  };
+
+  // Convert AudioBuffer to WAV Blob
+  const audioBufferToWav = (buffer: AudioBuffer): Blob => {
+    const numberOfChannels = buffer.numberOfChannels;
+    const sampleRate = buffer.sampleRate;
+    const format = 1; // PCM
+    const bitDepth = 16;
+
+    const bytesPerSample = bitDepth / 8;
+    const blockAlign = numberOfChannels * bytesPerSample;
+
+    const data = new Float32Array(buffer.length * numberOfChannels);
+    for (let channel = 0; channel < numberOfChannels; channel++) {
+      const channelData = buffer.getChannelData(channel);
+      for (let i = 0; i < buffer.length; i++) {
+        data[i * numberOfChannels + channel] = channelData[i];
+      }
+    }
+
+    const dataLength = data.length * bytesPerSample;
+    const bufferLength = 44 + dataLength;
+    const arrayBuffer = new ArrayBuffer(bufferLength);
+    const view = new DataView(arrayBuffer);
+
+    // Write WAV header
+    const writeString = (offset: number, string: string) => {
+      for (let i = 0; i < string.length; i++) {
+        view.setUint8(offset + i, string.charCodeAt(i));
+      }
+    };
+
+    writeString(0, 'RIFF');
+    view.setUint32(4, bufferLength - 8, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true); // fmt chunk size
+    view.setUint16(20, format, true);
+    view.setUint16(22, numberOfChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * blockAlign, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, bitDepth, true);
+    writeString(36, 'data');
+    view.setUint32(40, dataLength, true);
+
+    // Write audio data
+    let offset = 44;
+    for (let i = 0; i < data.length; i++) {
+      const sample = Math.max(-1, Math.min(1, data[i]));
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+      offset += 2;
+    }
+
+    return new Blob([arrayBuffer], { type: 'audio/wav' });
+  };
+
   const analyzeEmotions = async (text: string, audioBlob?: Blob): Promise<EmotionAnalysis[]> => {
     const combinedEmotions: EmotionAnalysis[] = [];
 
@@ -1249,6 +1408,7 @@ export default function TalkToMyself() {
         const data = await textResponse.json();
         console.log("Text emotion analysis result:", data);
         const textEmotions = (data.emotions || []).map((e: any) => ({ ...e, sources: ['text'] }));
+        console.log("Mapped text emotions:", textEmotions);
         combinedEmotions.push(...textEmotions);
       } else {
         console.warn("Text emotion analysis failed:", textResponse.status);
@@ -1260,11 +1420,15 @@ export default function TalkToMyself() {
     // Call Valence audio emotions API (if audio provided)
     if (audioBlob) {
       try {
+        // Preprocess audio in browser to meet Valence requirements
+        // (44.1kHz, stereo, minimum 5 seconds)
+        const preprocessedBlob = await preprocessAudioForValence(audioBlob);
+
         // Convert audio blob to base64
         const audioBase64 = await new Promise<string>((resolve) => {
           const reader = new FileReader();
           reader.onload = () => resolve(reader.result as string);
-          reader.readAsDataURL(audioBlob);
+          reader.readAsDataURL(preprocessedBlob);
         });
 
         const valenceResponse = await fetch(API_ENDPOINTS.EMOTIONS_VALENCE, {
@@ -2271,12 +2435,15 @@ export default function TalkToMyself() {
                         <span>Text-Based Emotion Analysis</span>
                       </CardTitle>
                       <CardDescription className="text-gray-600 text-lg">
-                        Analysis of your words and language using HuggingFace RoBERTa (27 emotions)
+                        {/* [CHANGE: 2025-12-14] Updated label for clarity on overlapping emotions */}
+                        Top 5 detected emotions from your words (confidence scores - emotions can overlap)
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="p-8">
                       {(() => {
                         const textEmotions = (currentSession.emotions || []).filter(e => e.sources?.includes('text'));
+                        console.log("UI Rendering - Text Emotions:", textEmotions);
+                        console.log("UI Rendering - All Emotions:", currentSession.emotions);
                         return textEmotions.length > 0 ? (
                           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                             {textEmotions.map((emotion, index) => (
@@ -2299,10 +2466,10 @@ export default function TalkToMyself() {
                               </div>
                             ))}
                           </div>
+
                         ) : (
-                          <div className="flex flex-col items-center justify-center py-12 text-center">
-                            <p className="text-gray-500">Text emotion analysis unavailable</p>
-                            <p className="text-gray-400 text-sm mt-2">Language analysis could not be performed</p>
+                          <div className="flex items-center justify-center py-4 bg-gray-50/50 rounded-xl border border-dashed border-gray-200">
+                            <p className="text-gray-400 text-sm">Text emotion analysis unavailable</p>
                           </div>
                         )
                       })()}
@@ -2319,7 +2486,8 @@ export default function TalkToMyself() {
                         <span>Audio-Based Emotion Analysis</span>
                       </CardTitle>
                       <CardDescription className="text-gray-600 text-lg">
-                        Top 3 emotions from voice tone analysis using <strong>Valence AI</strong> (7-emotion model)
+                        {/* [CHANGE: 2025-12-14] Updated label for clarity on probability distribution (adds to 100%) */}
+                        Top 3 emotions from voice tone using <strong>Valence AI</strong> (probability distribution - adds to 100%)
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="p-8">
@@ -2347,10 +2515,10 @@ export default function TalkToMyself() {
                               </div>
                             ))}
                           </div>
+
                         ) : (
-                          <div className="flex flex-col items-center justify-center py-12 text-center">
-                            <p className="text-gray-500">Audio analysis unavailable</p>
-                            <p className="text-gray-400 text-sm mt-2">Voice tone analysis could not be performed</p>
+                          <div className="flex items-center justify-center py-4 bg-gray-50/50 rounded-xl border border-dashed border-gray-200">
+                            <p className="text-gray-400 text-sm">Audio analysis unavailable</p>
                           </div>
                         )
                       })()}
@@ -2750,9 +2918,9 @@ export default function TalkToMyself() {
               </Card>
             </TabsContent>
           </Tabs>
-        </div>
-      </div>
-    </TooltipProvider>
+        </div >
+      </div >
+    </TooltipProvider >
   )
 }
 

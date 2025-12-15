@@ -1,134 +1,50 @@
-// API Route: Analyze emotions in user text using HuggingFace or fallback logic
-// Receives a POST request with { text } and returns an array of detected emotions.
-// Environment variables used (private, server-side only):
-//   HUGGINGFACE_API_KEY
-//
-// Returns: { emotions: Array<{ emotion: string, confidence: number }> } on success, or { error: ... } on failure.
-//
-export async function POST(request: Request) {
+import { NextRequest, NextResponse } from 'next/server';
+
+export async function POST(request: NextRequest) {
   try {
-    // Parse text from request body
-    const { text } = await request.json()
+    const { text } = await request.json();
 
     if (!text) {
-      return Response.json({ error: "Text is required" }, { status: 400 })
+      return NextResponse.json({ error: "Text is required" }, { status: 400 });
     }
 
-    // Try advanced Hugging Face models if key is configured
-    const huggingfaceApiKey = process.env.HUGGINGFACE_API_KEY
+    console.log("Analyzing transcript content:", text);
+
+    const huggingfaceApiKey = process.env.HUGGINGFACE_API_KEY;
     if (huggingfaceApiKey) {
       try {
-        // Use HuggingFace 27-emotion model with timeout
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+        const { HfInference } = require('@huggingface/inference');
+        const hf = new HfInference(huggingfaceApiKey);
         
-        const response = await fetch("https://api-inference.huggingface.co/models/SamLowe/roberta-base-go_emotions", {
-          headers: {
-            Authorization: `Bearer ${huggingfaceApiKey}`,
-            "Content-Type": "application/json",
-          },
-          method: "POST",
-          body: JSON.stringify({ inputs: text }),
-          signal: controller.signal,
-        })
-        
-        clearTimeout(timeoutId);
+        const result = await hf.textClassification({
+          model: 'SamLowe/roberta-base-go_emotions',
+          inputs: text,
+        });
 
-        if (response.ok) {
-          const emotions = await response.json()
-          // Handle the response format - it might be nested
-          let emotionData = emotions
-          if (Array.isArray(emotions) && emotions[0]) {
-            emotionData = emotions[0]
-          }
+        console.log("HuggingFace API response:", result);
 
-          if (Array.isArray(emotionData)) {
-            // Format and sort top 6 emotions
-            const formattedEmotions = emotionData
-              .map((emotion: any) => ({
-                emotion: emotion.label.charAt(0).toUpperCase() + emotion.label.slice(1).toLowerCase(),
-                confidence: emotion.score,
-              }))
-              .sort((a: any, b: any) => b.confidence - a.confidence)
-              .slice(0, 6)
-            return Response.json({ emotions: formattedEmotions })
-          }
+        if (result && Array.isArray(result)) {
+          const emotions = result.map((item: any) => ({
+            emotion: item.label,
+            confidence: item.score,
+          }));
+          
+          console.log("Final emotions analysis:", emotions);
+          return NextResponse.json({ emotions });
         } else {
-          // Log HuggingFace API error
-          console.log("HuggingFace API response not ok:", response.status, await response.text())
+          console.warn("Unexpected HuggingFace response format:", result);
+          return NextResponse.json({ emotions: [] });
         }
       } catch (error) {
-        // Log HuggingFace fetch error
-        if (error instanceof Error && error.name === 'AbortError') {
-          console.log("HuggingFace API timeout after 10 seconds, using fallback analysis")
-        } else {
-          console.error("Hugging Face API error:", error)
-        }
+        console.error("HuggingFace API error:", error);
+        return NextResponse.json({ emotions: [] });
       }
     }
 
-    // Fallback: Analyze text content for basic emotions
-    const text_lower = text.toLowerCase()
-    const emotions = []
-
-    // Analyze actual content with much more sophistication
-    console.log("Analyzing transcript content:", text)
-
-    // Joy/Happiness indicators
-    if (
-      text_lower.includes("love") ||
-      text_lower.includes("like") ||
-      text_lower.includes("enjoy") ||
-      text_lower.includes("dancing") ||
-      text_lower.includes("happy") ||
-      text_lower.includes("fun") ||
-      text_lower.includes("great") ||
-      text_lower.includes("amazing") ||
-      text_lower.includes("wonderful")
-    ) {
-      emotions.push({ emotion: "Joy", confidence: 0.85 })
-    }
-
-    // Excitement/Enthusiasm
-    if (
-      text_lower.includes("excited") ||
-      text_lower.includes("definitely") ||
-      text_lower.includes("absolutely") ||
-      text_lower.includes("really") ||
-      text_lower.includes("dancing")
-    ) {
-      emotions.push({ emotion: "Excitement", confidence: 0.8 })
-    }
-
-    // Love/Caring (for people mentioned)
-    if (
-      text_lower.includes("dana") ||
-      text_lower.includes("jess") ||
-      (text_lower.includes("with") && (text_lower.includes("love") || text_lower.includes("like")))
-    ) {
-      emotions.push({ emotion: "Caring", confidence: 0.75 })
-    }
-
-    // Approval/Positive sentiment
-    if (text_lower.includes("definitely") || text_lower.includes("yes") || text_lower.includes("absolutely")) {
-      emotions.push({ emotion: "Approval", confidence: 0.7 })
-    }
-
-    // Social connection
-    if (text_lower.includes("with") && (text_lower.includes("dana") || text_lower.includes("jess"))) {
-      emotions.push({ emotion: "Connection", confidence: 0.72 })
-    }
-
-    // No fallback emotions - return empty array when analysis fails
-    // This ensures we never lie to users with fake data
-
-    // Sort by confidence and take top 6
-    const sortedEmotions = emotions.sort((a, b) => b.confidence - a.confidence).slice(0, 6)
-
-    console.log("Final emotions analysis:", sortedEmotions)
-    return Response.json({ emotions: sortedEmotions })
+    // Fallback if no API key
+    return NextResponse.json({ emotions: [] });
   } catch (error) {
-    console.error("Emotion analysis error:", error)
-    return Response.json({ error: "Failed to analyze emotions" }, { status: 500 })
+    console.error("Emotions API error:", error);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

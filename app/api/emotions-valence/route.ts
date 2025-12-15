@@ -1,56 +1,90 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from 'next/server';
 
 export async function POST(request: NextRequest) {
   try {
-    const { audioBlob } = await request.json();
+    const body = await request.json();
+    const { audioBlob } = body;
 
     if (!audioBlob) {
-      return NextResponse.json({ error: "Audio blob is required" }, { status: 400 });
+      return NextResponse.json({
+        emotions: [],
+        fallback: true
+      });
     }
 
-    const valenceApiKey = process.env.VALENCE_API_KEY;
-    if (!valenceApiKey) {
-      console.error("Valence API key not found");
-      return NextResponse.json({ error: "Valence API key not configured" }, { status: 500 });
+    // [CHANGE: 2025-12-14] Added MIME type detection.
+    // REASON: Previously hardcoded to 'audio/wav', which caused 500 errors if client sent 'audio/webm'.
+    // Now detects actual format from base64 header.
+    // RISK: Relies on correct data URL format.
+    // Convert base64 to buffer and detect MIME type
+    const matches = audioBlob.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+    let base64Data = audioBlob;
+    let mimeType = 'audio/webm'; // Default for Chrome
+
+    if (matches && matches.length === 3) {
+      mimeType = matches[1]; // Extract MIME type from data URL
+      base64Data = matches[2];
     }
 
-    // Convert base64 audio to buffer
-    const audioBuffer = Buffer.from(audioBlob.split(',')[1], 'base64');
+    const audioBuffer = Buffer.from(base64Data, 'base64');
 
-    // Create FormData for multipart/form-data upload
-    const FormData = require('form-data');
+    // Create Blob with detected MIME type
+    const blob = new Blob([audioBuffer], { type: mimeType });
+
+    // Use native FormData
     const formData = new FormData();
-    formData.append('file', audioBuffer, {
-      filename: 'audio.wav',
-      contentType: 'audio/wav',
-    });
+    formData.append('file', blob, `audio.${mimeType.split('/')[1]}`);
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
+    const valenceUrl = 'https://xc8n2bo4f0.execute-api.us-west-2.amazonaws.com/emotionprediction?model=7emotions';
 
-    const response = await fetch("https://api.getvalenceai.com/emotionprediction", {
-      method: "POST",
+    const response = await fetch(valenceUrl, {
+      method: 'POST',
       headers: {
-        'x-api-key': valenceApiKey,
-        ...formData.getHeaders(),
+        'x-api-key': process.env.VALENCE_API_KEY || '',
       },
       body: formData,
-      signal: controller.signal,
     });
-
-    clearTimeout(timeoutId);
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`Valence API error: ${response.status} ${response.statusText}`, errorText);
-      throw new Error(`Valence API error: ${response.status} ${response.statusText}`);
+      console.error(`Valence API error: ${response.status}`, errorText);
+      return NextResponse.json({
+        emotions: [],
+        fallback: true
+      });
     }
 
     const result = await response.json();
-    console.log("Valence emotion analysis result:", result);
+    console.log('Valence API full response:', JSON.stringify(result, null, 2));
+    console.log('Response status:', response.status);
+    console.log('Has all_predictions?', !!result.all_predictions);
+    console.log('Has error?', !!result.error);
 
-    // Transform to EmotionAnalysis format
-    // Expected format: { main_emotion, confidence, all_predictions: { angry: 0.988, ... } }
+    if (result.error) {
+      console.error('Valence API returned error:', result.error);
+      return NextResponse.json({
+        emotions: [],
+        fallback: true,
+        error: result.error
+      });
+    }
+
+    // [CHANGE: 2025-12-14] Added 'limit' query parameter.
+    // REASON: Allows flexibility to request all 7 emotions (limit=7) for testing/curl, while defaulting to 3 for UI.
+    // RISK: None.
+    // Parse limit from query parameters
+    const { searchParams } = new URL(request.url);
+    const limitParam = searchParams.get('limit');
+    let limit = 3; // Default to top 3
+
+    if (limitParam) {
+      const parsedLimit = parseInt(limitParam, 10);
+      if (!isNaN(parsedLimit) && parsedLimit > 0) {
+        limit = parsedLimit;
+      }
+    }
+
+    // Transform to expected format
     if (result.all_predictions) {
       const emotions = Object.entries(result.all_predictions)
         .map(([emotion, confidence]) => ({
@@ -58,22 +92,19 @@ export async function POST(request: NextRequest) {
           confidence: confidence as number,
         }))
         .sort((a, b) => b.confidence - a.confidence)
-        .slice(0, 3); // Top 3 only
+        // [CHANGE: 2025-12-14] Usage of limit parameter
+        .slice(0, limit);
 
+      console.log(`Returning top ${limit} emotions:`, emotions);
       return NextResponse.json({ emotions });
     } else {
-      throw new Error("Unexpected Valence API response format");
+      console.warn('Valence response missing all_predictions field');
+      return NextResponse.json({ emotions: [], fallback: true });
     }
 
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
-      console.log("Valence API timeout after 15 seconds");
-    } else {
-      console.error("Valence emotion API error:", error);
-    }
-
-    // Return empty array on failure (non-intrusive error handling)
-    return NextResponse.json({ 
+    console.error("Valence API route error:", error);
+    return NextResponse.json({
       emotions: [],
       fallback: true
     });
