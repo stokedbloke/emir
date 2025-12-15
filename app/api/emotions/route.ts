@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
       try {
         const { HfInference } = require('@huggingface/inference');
         const hf = new HfInference(huggingfaceApiKey);
-        
+
         const result = await hf.textClassification({
           model: 'SamLowe/roberta-base-go_emotions',
           inputs: text,
@@ -25,10 +25,10 @@ export async function POST(request: NextRequest) {
 
         if (result && Array.isArray(result)) {
           const emotions = result.map((item: any) => ({
-            emotion: item.label,
+            emotion: item.label.charAt(0).toUpperCase() + item.label.slice(1),
             confidence: item.score,
           }));
-          
+
           console.log("Final emotions analysis:", emotions);
           return NextResponse.json({ emotions });
         } else {

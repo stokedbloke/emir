@@ -1254,16 +1254,19 @@ export default function TalkToMyself() {
   // DEBT: Manual WAV header construction (`audioBufferToWav`) is verbose. Could be replaced by a library.
   //
   // Preprocess audio for Valence API requirements (44.1kHz, stereo, 5-30s)
+  // Preprocess audio for Valence API requirements (44.1kHz, stereo, 5-30s)
   const preprocessAudioForValence = async (audioBlob: Blob): Promise<Blob> => {
+    let audioContext: AudioContext | null = null;
     try {
       console.log('Starting audio preprocessing for Valence...');
       console.log('Input blob:', { size: audioBlob.size, type: audioBlob.type });
 
-      const audioContext = new AudioContext({ sampleRate: 44100 });
+      audioContext = new AudioContext({ sampleRate: 44100 });
       const arrayBuffer = await audioBlob.arrayBuffer();
       console.log('ArrayBuffer size:', arrayBuffer.byteLength);
 
       const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      // ... (rest of processing logic stays same until return) ...
       console.log('Decoded audio:', {
         duration: audioBuffer.duration,
         channels: audioBuffer.numberOfChannels,
@@ -1278,7 +1281,6 @@ export default function TalkToMyself() {
       // Truncate if too long
       let processedBuffer = audioBuffer;
       if (audioBuffer.length > maxSamples) {
-        console.log(`Truncating audio from ${audioBuffer.duration}s to 30s...`);
         processedBuffer = audioContext.createBuffer(
           audioBuffer.numberOfChannels,
           maxSamples,
@@ -1293,7 +1295,6 @@ export default function TalkToMyself() {
 
       // Ensure stereo (2 channels)
       if (processedBuffer.numberOfChannels === 1) {
-        console.log('Converting mono to stereo...');
         const stereoBuffer = audioContext.createBuffer(
           2,
           processedBuffer.length,
@@ -1308,7 +1309,6 @@ export default function TalkToMyself() {
       // Ensure minimum 5 seconds duration
       let finalBuffer = processedBuffer;
       if (processedBuffer.length < minSamples) {
-        console.log(`Padding audio from ${processedBuffer.duration}s to 5s...`);
         finalBuffer = audioContext.createBuffer(
           2,
           minSamples,
@@ -1318,7 +1318,6 @@ export default function TalkToMyself() {
           const sourceData = processedBuffer.getChannelData(channel);
           const targetData = finalBuffer.getChannelData(channel);
           targetData.set(sourceData);
-          // Rest is already zeros (silence)
         }
       }
 
@@ -1327,14 +1326,16 @@ export default function TalkToMyself() {
       const wavBlob = audioBufferToWav(finalBuffer);
       console.log('WAV blob created:', { size: wavBlob.size, type: wavBlob.type });
 
-      await audioContext.close();
-
       return wavBlob;
     } catch (error) {
       console.error("Audio preprocessing error:", error);
       console.error("Error details:", error instanceof Error ? error.message : String(error));
       // Return original blob if preprocessing fails
       return audioBlob;
+    } finally {
+      if (audioContext) {
+        await audioContext.close();
+      }
     }
   };
 

@@ -17,11 +17,12 @@ export async function POST(request: NextRequest) {
     // Now detects actual format from base64 header.
     // RISK: Relies on correct data URL format.
     // Convert base64 to buffer and detect MIME type
-    const matches = audioBlob.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+    // [FIX 2025-12-14] Updated regex to handle MIME types with parameters (e.g. "audio/webm;codecs=opus")
+    const matches = audioBlob.match(/^data:([^;]+)(?:;.*)?;base64,(.+)$/);
     let base64Data = audioBlob;
     let mimeType = 'audio/webm'; // Default for Chrome
 
-    if (matches && matches.length === 3) {
+    if (matches && matches.length >= 3) {
       mimeType = matches[1]; // Extract MIME type from data URL
       base64Data = matches[2];
     }
