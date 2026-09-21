@@ -561,7 +561,19 @@ export default function TalkToMyself() {
   hasExplicitVoiceSelectionRef.current = false;
   setSelectedElevenLabsVoice("");
   } else {
-  recordingThreadContextRef.current = followUpParentRef.current;
+  const selectedParent = followUpParentRef.current;
+  const parentExists = selectedParent?.parentSessionId
+    ? sessions.some((session) => session.id === selectedParent.parentSessionId)
+    : false;
+  if (!selectedParent?.threadId || !selectedParent.parentSessionId || !parentExists) {
+    toast({
+      title: "Choose a reflection first",
+      description: "Select the reflection this follow-up responds to before recording.",
+      variant: "destructive",
+    });
+    return;
+  }
+  recordingThreadContextRef.current = selectedParent;
   }
   if (isSpeaking) return;
   
@@ -1007,7 +1019,7 @@ export default function TalkToMyself() {
       console.log("Red bubble timer shows:", recordingDuration, "seconds");
 
       const newSession: SessionData = {
-        id: Date.now().toString(),
+        id: crypto.randomUUID(),
         timestamp: new Date(), // Just use current time
         transcript,
         summary,
@@ -1071,6 +1083,7 @@ export default function TalkToMyself() {
             }
 
             const reflectionData = {
+              id: newSession.id,
               userId,
               transcript,
               summary,
@@ -1984,6 +1997,31 @@ export default function TalkToMyself() {
     )
   }
 
+  const journeySessions = (() => {
+    const reflectionSessions = sessions.filter((session) => session.transcript);
+    const byParent = new Map<string, SessionData[]>();
+    const validIds = new Set(reflectionSessions.map((session) => session.id));
+    for (const session of reflectionSessions) {
+      if (session.parentSessionId && validIds.has(session.parentSessionId)) {
+        const children = byParent.get(session.parentSessionId) || [];
+        children.push(session);
+        byParent.set(session.parentSessionId, children);
+      }
+    }
+    const ordered: SessionData[] = [];
+    const appendThread = (root: SessionData) => {
+      const descendants = byParent.get(root.id) || [];
+      descendants.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+      descendants.forEach(appendThread);
+      ordered.push(root);
+    };
+    reflectionSessions
+      .filter((session) => !session.parentSessionId || !validIds.has(session.parentSessionId))
+      .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
+      .forEach(appendThread);
+    return ordered;
+  })();
+
   // Place this BEFORE your return (
   const visibleTabs =
   1 +
@@ -2766,7 +2804,7 @@ export default function TalkToMyself() {
             )} */}
 
             {/* History Tab */}
-            {sessions.filter(s => s.transcript).length > 0 && (
+            {journeySessions.length > 0 && (
               <TabsContent value="history" className="space-y-8">
                 <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
                   <CardHeader className="bg-gradient-to-r from-amber-50 to-orange-50 p-8">
@@ -2782,7 +2820,7 @@ export default function TalkToMyself() {
                   </CardHeader>
                   <CardContent className="p-8">
   <div className="space-y-6">
-                      {sessions.filter(s => s.transcript).map((session) => (
+                      {journeySessions.map((session) => (
                         <div
                           key={session.id}
                           className={cn(

@@ -19,7 +19,7 @@ export async function POST(request: Request) {
   try {
     // Parse the incoming JSON body
     const body = await request.json();
-    const { userId, transcript, summary, emotions, vocal, recording_duration } = body;
+    const { id, userId, transcript, summary, emotions, vocal, recording_duration } = body;
     console.log('API received recording_duration:', recording_duration);
     console.log('API received recording_duration type:', typeof recording_duration);
     console.log('API received full body:', JSON.stringify(body, null, 2));
@@ -52,8 +52,29 @@ export async function POST(request: Request) {
       { id: userId, last_active: new Date() }
     ], { onConflict: 'id' });
 
+    const parentSessionId = body.device_info?.parent_session_id;
+    const threadId = body.device_info?.thread_id;
+    if (parentSessionId) {
+      const { data: parent, error: parentError } = await supabase
+        .from('reflections')
+        .select('id, device_info, created_at')
+        .eq('id', parentSessionId)
+        .eq('user_id', userId)
+        .maybeSingle();
+      if (parentError || !parent) {
+        return Response.json({ error: 'Follow-up parent does not exist for this user' }, { status: 400 });
+      }
+      if (new Date(parent.created_at).getTime() >= Date.now()) {
+        return Response.json({ error: 'Follow-up parent must be older than the reflection' }, { status: 400 });
+      }
+      if (parent.device_info?.thread_id && threadId && parent.device_info.thread_id !== threadId) {
+        return Response.json({ error: 'Follow-up and parent must share a thread ID' }, { status: 400 });
+      }
+    }
+
     // Insert reflection for this user with device info and service tracking
     const insertData = {
+      ...(id ? { id } : {}),
       user_id: userId,
       transcript,
       summary,
@@ -70,7 +91,11 @@ export async function POST(request: Request) {
     };
     console.log('Inserting into Supabase:', JSON.stringify(insertData, null, 2));
 
-    const { error } = await supabase.from('reflections').insert([insertData]);
+    const { data: savedReflection, error } = await supabase
+      .from('reflections')
+      .insert([insertData])
+      .select('id, created_at, device_info')
+      .single();
 
     if (error) {
       // Return error if insertion fails
@@ -81,7 +106,7 @@ export async function POST(request: Request) {
     console.log('Successfully inserted reflection into Supabase');
 
     // Success response
-    return Response.json({ success: true });
+    return Response.json({ success: true, reflection: savedReflection });
   } catch (error) {
     // Catch-all error handler
     console.error('API Error:', error);
