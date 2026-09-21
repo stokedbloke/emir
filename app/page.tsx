@@ -104,6 +104,7 @@ export default function TalkToMyself() {
   const [sessions, setSessions] = useState<SessionData[]>([]);
   const [currentSession, setCurrentSession] = useState<SessionData | null>(null);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [expandedThreadSessions, setExpandedThreadSessions] = useState<Record<string, boolean>>({});
   const followUpParentRef = useRef<{ threadId: string; parentSessionId: string } | null>(null);
 
   // Fetch reflections from API route for the current user
@@ -2283,26 +2284,6 @@ export default function TalkToMyself() {
                       <div className="flex items-center space-x-3">
                         <Button
                           variant="outline"
-                          size="icon"
-                          aria-label="Reflect on this synthesis"
-                          title="Reflect on this synthesis"
-                          disabled={isRecording || isProcessing || !currentSession?.summary}
-                          onClick={async () => {
-                            if (!currentSession) return;
-                            setActiveThreadId(currentSession.threadId || currentSession.id);
-                            followUpParentRef.current = {
-                              threadId: currentSession.threadId || currentSession.id,
-                              parentSessionId: currentSession.id,
-                            };
-                            setActiveTab("record");
-                            await startRecording();
-                          }}
-                          className="h-10 w-10 rounded-full border-purple-200 bg-purple-50 text-purple-600 hover:bg-purple-100"
-                        >
-                          <Mic className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="outline"
                           onClick={() => {
                             console.log('Listen button clicked, states:', { isSpeaking, isAudioReady, hasSummary: !!currentSession?.summary });
                             if (isSpeaking) {
@@ -2332,7 +2313,7 @@ export default function TalkToMyself() {
                               speakSummary(currentSession.summary);
                             }
                           }}
-                          disabled={!currentSession?.summary}
+                          disabled={isProcessing || isRecording || !currentSession?.summary}
                           className={cn(
                             "flex items-center space-x-2 rounded-xl px-6 py-3 transition-all duration-300",
                             isSpeaking
@@ -2470,9 +2451,67 @@ export default function TalkToMyself() {
                           )}
                         </blockquote>
                       </div>
+                      <div className="mt-8 flex flex-col items-center gap-3 border-t border-purple-100 pt-6">
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          aria-label="Record a follow-up reflection"
+                          title="Record a follow-up reflection"
+                          disabled={isRecording || isProcessing || isSpeaking || !currentSession.summary}
+                          onClick={async () => {
+                            setActiveThreadId(currentSession.threadId || currentSession.id);
+                            followUpParentRef.current = {
+                              threadId: currentSession.threadId || currentSession.id,
+                              parentSessionId: currentSession.id,
+                            };
+                            setActiveTab("record");
+                            await startRecording();
+                          }}
+                          className="size-12 rounded-full border-purple-200 bg-purple-50 text-purple-600 shadow-sm hover:bg-purple-100"
+                        >
+                          <Mic data-icon="inline-start" />
+                        </Button>
+                        <span className="text-sm font-medium text-purple-700">Reflect on this synthesis</span>
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
+                {currentSession && (() => {
+                  const threadId = currentSession.threadId || currentSession.id;
+                  const threadSessions = sessions
+                    .filter((session) => (session.threadId || session.id) === threadId && session.id !== currentSession.id)
+                    .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+                  if (threadSessions.length === 0) return null;
+                  return (
+                    <Card className="border-purple-100 bg-white/60 shadow-lg">
+                      <CardHeader className="pb-3">
+                        <CardTitle className="text-base text-purple-800">Earlier in this reflection thread</CardTitle>
+                        <CardDescription>Expand a previous synthesis to revisit what was read before this follow-up.</CardDescription>
+                      </CardHeader>
+                      <CardContent className="flex flex-col gap-3 pt-0">
+                        {threadSessions.map((session) => {
+                          const expanded = expandedThreadSessions[session.id] ?? false;
+                          return (
+                            <div key={session.id} className="rounded-xl border border-purple-100 bg-purple-50/50">
+                              <button
+                                type="button"
+                                className="flex w-full items-center justify-between gap-4 p-4 text-left"
+                                aria-expanded={expanded}
+                                onClick={() => setExpandedThreadSessions((previous) => ({ ...previous, [session.id]: !expanded }))}
+                              >
+                                <span className="text-sm font-medium text-gray-700">
+                                  {session.timestamp.toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                                </span>
+                                <span className="text-sm font-medium text-purple-700">{expanded ? "Hide synthesis" : "Show synthesis"}</span>
+                              </button>
+                              {expanded && <p className="border-t border-purple-100 px-4 pb-4 pt-3 text-gray-700 leading-relaxed">{session.summary}</p>}
+                            </div>
+                          );
+                        })}
+                      </CardContent>
+                    </Card>
+                  );
+                })()}
                 {currentSession && (
                   <div className="flex items-center space-x-2 mt-2">
                     <Badge variant="secondary">
