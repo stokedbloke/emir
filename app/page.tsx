@@ -2397,7 +2397,9 @@ export default function TalkToMyself() {
   >
   {hasVoiceClone && userVoiceCloneId && <option value={userVoiceCloneId}>My voice clone ({userVoiceCloneId.slice(0, 3)})</option>}
   {elevenLabsVoices.map((voice) => {
-    const displayName = voice.name.replace(/([ _-])([^ _-]{3})[^ _-]*/g, "$1$2");
+    const displayName = voice.name
+      .replace(/^(User Voice Clone - )([a-z0-9]{3})[a-z0-9-]*/i, "$1$2")
+      .replace(/^user_([a-z0-9]{3})[a-z0-9-]*/i, "user_$1");
     return <option key={voice.id} value={voice.id}>{displayName}</option>;
   })}
   </select>
@@ -2916,7 +2918,9 @@ export default function TalkToMyself() {
                         onChange={e => handleGlobalSettingsChange({ elevenlabs_voice_id: e.target.value })}
                       >
   {elevenLabsVoices.map(v => (
-  <option key={v.id} value={v.id}>{v.name.replace(/([ _-])([^ _-]{3})[^ _-]*/g, "$1$2")}</option>
+  <option key={v.id} value={v.id}>{v.name
+  .replace(/^(User Voice Clone - )([a-z0-9]{3})[a-z0-9-]*/i, "$1$2")
+  .replace(/^user_([a-z0-9]{3})[a-z0-9-]*/i, "user_$1")}</option>
   ))}
                       </select>
                       <label>Hume Voice</label>
