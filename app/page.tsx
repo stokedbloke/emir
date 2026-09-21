@@ -1039,6 +1039,7 @@ export default function TalkToMyself() {
         parentSessionId: recordingThreadContextRef.current?.parentSessionId,
       }
       followUpParentRef.current = null
+      recordingThreadContextRef.current = null
       setActiveThreadId(newSession.threadId || null)
 
       setSessions((prev) => [newSession, ...prev])
@@ -2017,10 +2018,10 @@ export default function TalkToMyself() {
     }
     const ordered: SessionData[] = [];
     const appendThread = (root: SessionData) => {
+      ordered.push(root);
       const descendants = byParent.get(root.id) || [];
       descendants.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
       descendants.forEach(appendThread);
-      ordered.push(root);
     };
     reflectionSessions
       .filter((session) => !session.parentSessionId || !validIds.has(session.parentSessionId))
@@ -2835,7 +2836,7 @@ export default function TalkToMyself() {
                             session.parentSessionId && "ml-8 pl-6",
                           )}
                         >
-                          {session.parentSessionId && sessions.some((parent) => parent.id === session.parentSessionId) && (
+                          {session.parentSessionId && journeySessions.some((parent) => parent.id === session.parentSessionId && parent.threadId === session.threadId) && (
                             <div
                               className="pointer-events-none absolute -left-4 -top-6 h-[calc(100%+1.5rem)] w-4 border-l-2 border-b-2 border-purple-400 rounded-bl-xl"
                               aria-hidden="true"
