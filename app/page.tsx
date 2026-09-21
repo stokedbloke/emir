@@ -2446,7 +2446,7 @@ export default function TalkToMyself() {
                         )}
 
                         {/* Delete Clone Button - only show when voice clone exists */}
-                        {hasVoiceClone && userVoiceCloneId && (
+                        {hasVoiceClone && userVoiceCloneId && selectedElevenLabsVoice && (
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <Button
