@@ -14,7 +14,7 @@ export async function POST(request: Request) {
   console.log('=== SUMMARIZE API CALLED ===');
   try {
     // Parse transcript and service from request body
-    const { transcript, service = "openai" } = await request.json()
+    const { transcript, service = "gemini" } = await request.json()
     console.log("Summarize service requested:", service);
     console.log("Transcript length:", transcript?.length);
 
@@ -29,7 +29,7 @@ export async function POST(request: Request) {
 
 RULES:
 - Respond in first person perspective.
-- NEVER use any second/third person pronouns to refer to the speaker. Only use second/third person pronouns if he speaker uses them to refer to someone else
+- NEVER use any second/third person pronouns to refer to the speaker. Only use second/third person pronouns if the speaker uses them to refer to someone else
 - NEVER say "what I'm hearing" or "I understand that you..."
 - Write as if you are the person is speaking about their own experience
 - Be specific and avoid generic statements
@@ -71,12 +71,8 @@ Rephrased reflection (FIRST PERSON ONLY):`
         }
         const google = createGoogleGenerativeAI({ apiKey: googleApiKey })
 
-        // [CHANGE: 2025-12-14] Switched from 'gemini-2.0-flash-exp' to 'gemini-flash-latest'
-        // REASON: The 'exp' model has 0 free tier quota, causing 500 errors. 'gemini-flash-latest' includes free tier.
-        // RISK: 'latest' alias tracks the newest model, which might introduce slight behavioral changes over time.
-        // DEBT: Model name is hardcoded. Should ideally be moved to an environment variable or constants file.
-        model = google("gemini-flash-latest")
-        console.log("Using Gemini model: gemini-flash-latest");
+        model = google("gemini-3.6-flash")
+        console.log("Using Gemini model: gemini-3.6-flash");
         break
       default:
         // Use OpenAI (requires OPENAI_API_KEY)
@@ -105,21 +101,15 @@ Rephrased reflection (FIRST PERSON ONLY):`
     console.log("Gemini raw response:", text);
     console.log("Gemini trimmed response:", summary);
 
-    // Fallback if LLM returns empty or generic response
     if (
       !summary ||
       summary.toLowerCase().includes("please provide the personal share") ||
       summary.toLowerCase().includes("i need the text") ||
-      summary.length < 3 // Too short to be meaningful
+      summary.length < 3
     ) {
-      console.warn("LLM returned empty or invalid response, using fallback");
-      // Simple fallback: echo or basic paraphrase
-      summary = transcript
-        ? `I heard: "${transcript}".`
-        : "No meaningful content was provided to summarize.";
+      return Response.json({ error: "Gemini returned an empty or unusable summary" }, { status: 502 });
     }
 
-    // Success response
     console.log("Returning summary, length:", summary.length);
     return Response.json({ summary });
   } catch (error) {

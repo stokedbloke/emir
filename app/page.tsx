@@ -1083,9 +1083,14 @@ export default function TalkToMyself() {
           }
         })();
       }
-    } catch (error) {
-      console.error("Processing error:", error)
-    } finally {
+  } catch (error) {
+  console.error("Processing error:", error)
+  toast({
+  title: "Summary generation failed",
+  description: error instanceof Error ? error.message : "Gemini could not summarize this reflection.",
+  variant: "destructive",
+  });
+  } finally {
       setIsProcessing(false)
       setProcessingStage("")
       setProgress(0)
@@ -1209,17 +1214,13 @@ export default function TalkToMyself() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           transcript,
-          service: globalSettings?.summary_service, // <--- use this!
+          service: globalSettings?.summary_service || "gemini",
         }),
       })
       console.log('Summary API response status:', response.status);
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        // Don't show invasive error - just log and fallback gracefully
-        console.warn('Summary API failed, using transcript as fallback');
-        const fallbackSummary = transcript ? `I said: "${transcript}"` : "";
-        console.log('Fallback summary generated:', fallbackSummary);
-        return fallbackSummary;
+        throw new Error(errorData.details || errorData.error || `Summary API failed (${response.status})`);
       }
 
       const data = await response.json()
@@ -1234,19 +1235,13 @@ export default function TalkToMyself() {
         summary.toLowerCase().includes("original text") ||
         summary.length < 10 // Too short to be meaningful
       ) {
-        console.warn('Summary appears to be a stub, using transcript as fallback');
-        const fallbackSummary = transcript ? `I said: "${transcript}"` : "";
-        console.log('Fallback summary generated:', fallbackSummary);
-        return fallbackSummary;
+        throw new Error("Gemini returned an unusable summary");
       }
 
       return summary;
     } catch (error) {
-      // On error, fallback to transcript or nothing
-      console.warn('Summary generation error, using transcript as fallback');
-      const fallbackSummary = transcript ? `I said: "${transcript}"` : "";
-      console.log('Fallback summary generated:', fallbackSummary);
-      return fallbackSummary;
+      console.error("Summary generation failed:", error);
+      throw error;
     }
   }
 
