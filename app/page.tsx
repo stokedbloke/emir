@@ -2774,7 +2774,7 @@ export default function TalkToMyself() {
                       <span>Your Journey</span>
                     </CardTitle>
                       <CardDescription className="text-gray-600 text-lg">
-                      Your reflections, grouped into connected threads so each follow-up stays with the synthesis it responds to.
+                      Your reflections. Follow-ups identify the reflection they respond to.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="p-8">
@@ -2784,7 +2784,7 @@ export default function TalkToMyself() {
                           key={session.id}
                           className={cn(
                             "relative",
-                            session.parentSessionId && "ml-8 border-l-2 border-purple-300 pl-6",
+                            session.parentSessionId && "ml-8 pl-6",
                           )}
                         >
                           <div
@@ -2803,6 +2803,11 @@ export default function TalkToMyself() {
                                 <span className="inline-flex items-center rounded-full bg-purple-100 px-3 py-1 text-xs font-semibold text-purple-700">
                                   {session.parentSessionId ? "Follow-up reflection" : "Original reflection"}
                                 </span>
+                                {session.parentSessionId && (
+                                  <span className="text-xs font-medium text-purple-700">
+                                    Follow-up to {sessions.find((parent) => parent.id === session.parentSessionId)?.timestamp.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) || "an earlier reflection"}
+                                  </span>
+                                )}
                                 <span className="text-sm text-gray-500">
                                   {session.timestamp.toLocaleDateString("en-US", {
                                     month: "short",
