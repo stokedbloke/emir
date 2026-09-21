@@ -136,18 +136,24 @@ export default function TalkToMyself() {
       console.log("Raw reflection data from API:", data);
 
       // Map DB rows to SessionData shape
-      const mappedSessions = (data.reflections || []).map((row: any) => {
+      const reflectionRows = data.reflections || [];
+      const persistedIds = new Set(reflectionRows.map((row: any) => String(row.id)));
+      const mappedSessions = reflectionRows.map((row: any) => {
         console.log("Mapping row:", row);
+        const persistedParentId = row.device_info?.parent_session_id;
+        const parentSessionId = persistedParentId && persistedIds.has(String(persistedParentId))
+          ? String(persistedParentId)
+          : undefined;
         return {
-          id: row.id,
+          id: String(row.id),
           timestamp: new Date(row.created_at),
           transcript: row.transcript,
           summary: row.summary,
           emotions: row.emotions || [],
           vocalCharacteristics: row.vocal || {},
           audioBlob: undefined, // Not stored in DB
-          threadId: row.device_info?.thread_id || row.id,
-  parentSessionId: row.device_info?.parent_session_id,
+          threadId: row.device_info?.thread_id || String(row.id),
+  parentSessionId,
   recordingDuration: (() => {
             // New format: duration stored in device_info.recording_duration_seconds
             if (row.device_info && typeof row.device_info === 'object' && row.device_info.recording_duration_seconds) {
@@ -2773,17 +2779,14 @@ export default function TalkToMyself() {
                   </CardHeader>
                   <CardContent className="p-8">
   <div className="space-y-6">
-                      {sessions.filter(s => s.transcript).map((session, index, visibleSessions) => (
+                      {sessions.filter(s => s.transcript).map((session) => (
                         <div
                           key={session.id}
                           className={cn(
                             "relative",
-                            session.parentSessionId && "ml-8",
+                            session.parentSessionId && "ml-8 border-l-2 border-purple-300 pl-6",
                           )}
                         >
-                          {(session.parentSessionId || visibleSessions[index + 1]?.parentSessionId === session.id) && (
-                            <div className="pointer-events-none absolute left-3 -top-6 -bottom-6 border-l-2 border-purple-300" aria-hidden="true" />
-                          )}
                           <div
                           className={cn(
                             "p-6 rounded-2xl cursor-pointer transition-all duration-300 border-2 relative",
