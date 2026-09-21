@@ -107,6 +107,7 @@ export default function TalkToMyself() {
   const [expandedThreadSessions, setExpandedThreadSessions] = useState<Record<string, boolean>>({});
   const followUpParentRef = useRef<{ threadId: string; parentSessionId: string } | null>(null);
   const hasExplicitVoiceSelectionRef = useRef(false);
+  const recordingThreadContextRef = useRef<{ threadId?: string; parentSessionId?: string } | null>(null);
 
   // Fetch reflections from API route for the current user
   const fetchReflections = async (userId: string) => {
@@ -546,9 +547,12 @@ export default function TalkToMyself() {
   const startRecording = async (mode: "new" | "follow-up" = "new") => {
   if (mode === "new") {
   followUpParentRef.current = null;
+  recordingThreadContextRef.current = null;
   setActiveThreadId(null);
   hasExplicitVoiceSelectionRef.current = false;
   setSelectedElevenLabsVoice("");
+  } else {
+  recordingThreadContextRef.current = followUpParentRef.current;
   }
   if (isSpeaking) return;
   
@@ -1009,8 +1013,8 @@ export default function TalkToMyself() {
         audioBlob,
         // Store the actual duration from the red bubble timer
         recordingDuration: recordingDuration,
-        threadId: followUpParentRef.current?.threadId || Date.now().toString(),
-        parentSessionId: followUpParentRef.current?.parentSessionId,
+        threadId: recordingThreadContextRef.current?.threadId || crypto.randomUUID(),
+        parentSessionId: recordingThreadContextRef.current?.parentSessionId,
       }
       followUpParentRef.current = null
       setActiveThreadId(newSession.threadId || null)
@@ -2777,8 +2781,8 @@ export default function TalkToMyself() {
                             session.parentSessionId && "ml-8",
                           )}
                         >
-                          {session.parentSessionId && visibleSessions[index - 1]?.threadId === session.threadId && (
-                            <div className="absolute -left-4 -top-6 h-6 border-l-2 border-purple-300" aria-hidden="true" />
+                          {(session.parentSessionId || visibleSessions[index + 1]?.parentSessionId === session.id) && (
+                            <div className="pointer-events-none absolute left-3 -top-6 -bottom-6 border-l-2 border-purple-300" aria-hidden="true" />
                           )}
                           <div
                           className={cn(
@@ -2795,9 +2799,6 @@ export default function TalkToMyself() {
                               <div className="flex items-center gap-3 mb-3">
                                 <span className="inline-flex items-center rounded-full bg-purple-100 px-3 py-1 text-xs font-semibold text-purple-700">
                                   {session.parentSessionId ? "Follow-up reflection" : "Original reflection"}
-                                </span>
-                                <span className="text-sm text-gray-500">
-                                  {session.threadId ? `Thread ${session.threadId.slice(0, 6)}` : "Reflection thread"}
                                 </span>
                                 <span className="text-sm text-gray-500">
                                   {session.timestamp.toLocaleDateString("en-US", {
