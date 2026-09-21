@@ -103,6 +103,8 @@ export default function TalkToMyself() {
   // Sessions state management - reverted from useSessions hook for simplicity
   const [sessions, setSessions] = useState<SessionData[]>([]);
   const [currentSession, setCurrentSession] = useState<SessionData | null>(null);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const followUpParentRef = useRef<{ threadId: string; parentSessionId: string } | null>(null);
 
   // Fetch reflections from API route for the current user
   const fetchReflections = async (userId: string) => {
@@ -141,7 +143,9 @@ export default function TalkToMyself() {
           emotions: row.emotions || [],
           vocalCharacteristics: row.vocal || {},
           audioBlob: undefined, // Not stored in DB
-          recordingDuration: (() => {
+          threadId: row.device_info?.thread_id || row.id,
+  parentSessionId: row.device_info?.parent_session_id,
+  recordingDuration: (() => {
             // New format: duration stored in device_info.recording_duration_seconds
             if (row.device_info && typeof row.device_info === 'object' && row.device_info.recording_duration_seconds) {
               return row.device_info.recording_duration_seconds;
@@ -1016,7 +1020,11 @@ export default function TalkToMyself() {
         audioBlob,
         // Store the actual duration from the red bubble timer
         recordingDuration: recordingDuration,
+        threadId: followUpParentRef.current?.threadId || Date.now().toString(),
+        parentSessionId: followUpParentRef.current?.parentSessionId,
       }
+      followUpParentRef.current = null
+      setActiveThreadId(newSession.threadId || null)
 
       setSessions((prev) => [newSession, ...prev])
       setCurrentSession(newSession)
@@ -1066,8 +1074,12 @@ export default function TalkToMyself() {
               summary,
               emotions,
               vocal: vocalCharacteristics,
-              device_info: getDeviceInfo(),
-              browser_info: getBrowserInfo(),
+  device_info: {
+    ...getDeviceInfo(),
+    thread_id: newSession.threadId,
+    parent_session_id: newSession.parentSessionId,
+  },
+  browser_info: getBrowserInfo(),
               location_info: null, // Could add geolocation if needed
               tts_service_used: actualTTSService,
               summary_service_used: globalSettings?.summary_service || 'unknown',
@@ -2271,6 +2283,26 @@ export default function TalkToMyself() {
                       <div className="flex items-center space-x-3">
                         <Button
                           variant="outline"
+                          size="icon"
+                          aria-label="Reflect on this synthesis"
+                          title="Reflect on this synthesis"
+                          disabled={isRecording || isProcessing || !currentSession?.summary}
+                          onClick={async () => {
+                            if (!currentSession) return;
+                            setActiveThreadId(currentSession.threadId || currentSession.id);
+                            followUpParentRef.current = {
+                              threadId: currentSession.threadId || currentSession.id,
+                              parentSessionId: currentSession.id,
+                            };
+                            setActiveTab("record");
+                            await startRecording();
+                          }}
+                          className="h-10 w-10 rounded-full border-purple-200 bg-purple-50 text-purple-600 hover:bg-purple-100"
+                        >
+                          <Mic className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="outline"
                           onClick={() => {
                             console.log('Listen button clicked, states:', { isSpeaking, isAudioReady, hasSummary: !!currentSession?.summary });
                             if (isSpeaking) {
@@ -2725,7 +2757,8 @@ export default function TalkToMyself() {
                         <div
                           key={session.id}
                           className={cn(
-                            "p-6 rounded-2xl cursor-pointer transition-all duration-300 border-2",
+                            "p-6 rounded-2xl cursor-pointer transition-all duration-300 border-2 relative",
+                            session.parentSessionId && "ml-8 border-l-4 border-l-purple-300",
                             currentSession?.id === session.id
                               ? "bg-gradient-to-r from-purple-50 to-pink-50 border-purple-200 shadow-lg"
                               : "bg-white/60 border-gray-200 hover:bg-gradient-to-r hover:from-purple-50 hover:to-pink-50 hover:border-purple-200 hover:shadow-lg",
@@ -2735,6 +2768,9 @@ export default function TalkToMyself() {
                           <div className="flex justify-between items-start">
                             <div className="flex-1">
                               <div className="flex items-center space-x-3 mb-3">
+                                {session.parentSessionId && (
+                                  <span className="text-xs font-medium text-purple-600">Follow-up reflection</span>
+                                )}
                                 <Badge variant="outline" className="text-xs">
                                   Session {sessions.length - index}
                                 </Badge>

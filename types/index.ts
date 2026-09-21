@@ -24,7 +24,9 @@ export interface SessionData {
   vocalCharacteristics: VocalCharacteristics
   audioBlob?: Blob
   recordingDuration?: number
-}
+  threadId?: string
+  parentSessionId?: string
+  }
 
 export type GlobalSettings = {
   summary_service: string;
