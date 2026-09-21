@@ -2774,7 +2774,7 @@ export default function TalkToMyself() {
                       <span>Your Journey</span>
                     </CardTitle>
                       <CardDescription className="text-gray-600 text-lg">
-                      Your reflections. Follow-ups identify the reflection they respond to.
+                      Your reflections
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="p-8">
@@ -2787,6 +2787,12 @@ export default function TalkToMyself() {
                             session.parentSessionId && "ml-8 pl-6",
                           )}
                         >
+                          {session.parentSessionId && sessions.some((parent) => parent.id === session.parentSessionId) && (
+                            <div
+                              className="pointer-events-none absolute -left-4 -top-6 h-6 w-4 border-l-2 border-b-2 border-purple-300 rounded-bl-xl"
+                              aria-hidden="true"
+                            />
+                          )}
                           <div
                           className={cn(
                             "p-6 rounded-2xl cursor-pointer transition-all duration-300 border-2 relative",
@@ -2803,11 +2809,6 @@ export default function TalkToMyself() {
                                 <span className="inline-flex items-center rounded-full bg-purple-100 px-3 py-1 text-xs font-semibold text-purple-700">
                                   {session.parentSessionId ? "Follow-up reflection" : "Original reflection"}
                                 </span>
-                                {session.parentSessionId && (
-                                  <span className="text-xs font-medium text-purple-700">
-                                    Follow-up to {sessions.find((parent) => parent.id === session.parentSessionId)?.timestamp.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) || "an earlier reflection"}
-                                  </span>
-                                )}
                                 <span className="text-sm text-gray-500">
                                   {session.timestamp.toLocaleDateString("en-US", {
                                     month: "short",
