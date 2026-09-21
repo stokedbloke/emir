@@ -285,7 +285,9 @@ export default function TalkToMyself() {
       if (storedVoiceId) {
         setUserVoiceCloneId(storedVoiceId);
         setHasVoiceClone(true);
-        console.log('Voice clone loaded from localStorage:', storedVoiceId);
+        hasExplicitVoiceSelectionRef.current = true;
+        setSelectedElevenLabsVoice(storedVoiceId);
+        console.log('Voice clone loaded from localStorage and selected as default:', storedVoiceId);
       }
     }
   }, [userId]);
@@ -1442,12 +1444,16 @@ export default function TalkToMyself() {
     fetchVoices();
   }, [globalSettings?.elevenlabs_voice_id]);
 
-  // A new reflection starts with the default ElevenLabs voice. Generated voices
-  // remain available through the selector and only apply after explicit choice.
+  // A configured voice clone is the default for every new reflection.
   useEffect(() => {
-  hasExplicitVoiceSelectionRef.current = false;
-  setSelectedElevenLabsVoice("");
-  }, [currentSession?.id]);
+  if (userVoiceCloneId && hasVoiceClone) {
+    hasExplicitVoiceSelectionRef.current = true;
+    setSelectedElevenLabsVoice(userVoiceCloneId);
+  } else {
+    hasExplicitVoiceSelectionRef.current = false;
+    setSelectedElevenLabsVoice("");
+  }
+  }, [currentSession?.id, userVoiceCloneId, hasVoiceClone]);
   
   
   const handleDeleteVoiceClone = async () => {
@@ -1461,9 +1467,11 @@ export default function TalkToMyself() {
         });
 
         // Clear local state
-        setUserVoiceCloneId(null);
-        setHasVoiceClone(false);
-        setHasRequestedVoiceClone(false);
+  setUserVoiceCloneId(null);
+  setHasVoiceClone(false);
+  hasExplicitVoiceSelectionRef.current = false;
+  setSelectedElevenLabsVoice("");
+  setHasRequestedVoiceClone(false);
         setVoiceCloneError(null); // Clear any error messages
         localStorage.removeItem(`${DEFAULT_VALUES.USER_VOICE_CLONE_PREFIX}${userId}`);
 
@@ -1562,6 +1570,8 @@ export default function TalkToMyself() {
           // Update the voice clone ID only after ElevenLabs confirms the replacement.
           setUserVoiceCloneId(data.voiceId);
           setHasVoiceClone(true);
+          hasExplicitVoiceSelectionRef.current = true;
+          setSelectedElevenLabsVoice(data.voiceId);
           localStorage.setItem(`${DEFAULT_VALUES.USER_VOICE_CLONE_PREFIX}${userId}`, data.voiceId);
 
           toast({
@@ -1593,12 +1603,14 @@ export default function TalkToMyself() {
             throw new Error('Voice clone creation returned no voice ID');
           }
 
-          setUserVoiceCloneId(data.voiceId);
-          setHasVoiceClone(true);
-          localStorage.setItem(`${DEFAULT_VALUES.USER_VOICE_CLONE_PREFIX}${userId}`, data.voiceId);
+  setUserVoiceCloneId(data.voiceId);
+  setHasVoiceClone(true);
+  hasExplicitVoiceSelectionRef.current = true;
+  setSelectedElevenLabsVoice(data.voiceId);
+  localStorage.setItem(`${DEFAULT_VALUES.USER_VOICE_CLONE_PREFIX}${userId}`, data.voiceId);
 
-          toast({
-            title: "Voice clone created!",
+  toast({
+  title: "Voice clone created!",
             description: "Your voice clone is ready! Click 'Listen' to hear your reflection in your own voice.",
           });
         } else {
