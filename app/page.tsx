@@ -106,6 +106,7 @@ export default function TalkToMyself() {
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [expandedThreadSessions, setExpandedThreadSessions] = useState<Record<string, boolean>>({});
   const followUpParentRef = useRef<{ threadId: string; parentSessionId: string } | null>(null);
+  const hasExplicitVoiceSelectionRef = useRef(false);
 
   // Fetch reflections from API route for the current user
   const fetchReflections = async (userId: string) => {
@@ -546,6 +547,8 @@ export default function TalkToMyself() {
   if (mode === "new") {
   followUpParentRef.current = null;
   setActiveThreadId(null);
+  hasExplicitVoiceSelectionRef.current = false;
+  setSelectedElevenLabsVoice("");
   }
   if (isSpeaking) return;
   
@@ -1483,6 +1486,7 @@ export default function TalkToMyself() {
   // A new reflection starts with the default ElevenLabs voice. Generated voices
   // remain available through the selector and only apply after explicit choice.
   useEffect(() => {
+  hasExplicitVoiceSelectionRef.current = false;
   setSelectedElevenLabsVoice("");
   }, [currentSession?.id]);
   
@@ -1735,7 +1739,7 @@ export default function TalkToMyself() {
     });
 
   // A selected ElevenLabs custom voice takes precedence over the locally-created clone.
-  const activeCustomVoiceId = selectedElevenLabsVoice || null;
+  const activeCustomVoiceId = hasExplicitVoiceSelectionRef.current ? selectedElevenLabsVoice || null : null;
   console.log('Voice selection:', { activeCustomVoiceId, hasVoiceClone, userVoiceCloneId });
   if (activeCustomVoiceId) {
   try {
@@ -2367,6 +2371,7 @@ export default function TalkToMyself() {
   value={selectedElevenLabsVoice || ""}
   onChange={(event) => {
   const voiceId = event.target.value;
+  hasExplicitVoiceSelectionRef.current = Boolean(voiceId);
   setSelectedElevenLabsVoice(voiceId);
   if (userId) localStorage.setItem(`em-elevenlabs-voice-${userId}`, voiceId);
   }}
