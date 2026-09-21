@@ -1467,10 +1467,7 @@ export default function TalkToMyself() {
             .filter((v: any) => v.category === "cloned" || v.category === "generated" || v.category === "professional")
             .map((v: any) => ({ id: v.voice_id, name: v.name, category: v.category }));
           setElevenLabsVoices(customVoices);
-          const configuredVoiceId = globalSettings?.elevenlabs_voice_id;
-          if (configuredVoiceId && customVoices.some((v: { id: string }) => v.id === configuredVoiceId)) {
-            setSelectedElevenLabsVoice(configuredVoiceId);
-          }
+
         }
       } catch (e) {
         console.warn("Failed to fetch ElevenLabs voices", e);
@@ -1479,16 +1476,13 @@ export default function TalkToMyself() {
     fetchVoices();
   }, [globalSettings?.elevenlabs_voice_id]);
 
+  // A new reflection starts with the default ElevenLabs voice. Generated voices
+  // remain available through the selector and only apply after explicit choice.
   useEffect(() => {
-    const configuredVoiceId = globalSettings?.elevenlabs_voice_id;
-    const savedVoiceId = userId ? localStorage.getItem(`em-elevenlabs-voice-${userId}`) : null;
-    const preferredVoiceId = savedVoiceId || configuredVoiceId;
-    if (preferredVoiceId && elevenLabsVoices.some((voice) => voice.id === preferredVoiceId)) {
-      setSelectedElevenLabsVoice(preferredVoiceId);
-    }
-  }, [globalSettings?.elevenlabs_voice_id, elevenLabsVoices, userId]);
-
-
+  setSelectedElevenLabsVoice("");
+  }, [currentSession?.id]);
+  
+  
   const handleDeleteVoiceClone = async () => {
     try {
       if (userVoiceCloneId) {
@@ -1737,7 +1731,7 @@ export default function TalkToMyself() {
     });
 
   // A selected ElevenLabs custom voice takes precedence over the locally-created clone.
-  const activeCustomVoiceId = selectedElevenLabsVoice || (hasVoiceClone ? userVoiceCloneId : null);
+  const activeCustomVoiceId = selectedElevenLabsVoice || null;
   console.log('Voice selection:', { activeCustomVoiceId, hasVoiceClone, userVoiceCloneId });
   if (activeCustomVoiceId) {
   try {
@@ -1783,7 +1777,7 @@ export default function TalkToMyself() {
     // Fallback to default ElevenLabs voice if configured
     if (globalSettings?.tts_service === 'elevenlabs') {
       try {
-        const payload = { text: summary, voiceId: selectedElevenLabsVoice || globalSettings.elevenlabs_voice_id || DEFAULT_VALUES.ELEVENLABS_VOICE_ID };
+        const payload = { text: summary, voiceId: selectedElevenLabsVoice || DEFAULT_VALUES.ELEVENLABS_VOICE_ID };
         console.log('Sending ElevenLabs TTS payload:', payload);
         const response = await fetch(API_ENDPOINTS.VOICE_ELEVENLABS, {
           method: "POST",
@@ -2366,7 +2360,7 @@ export default function TalkToMyself() {
   <label className="sr-only" htmlFor="elevenlabs-voice-select">Choose an ElevenLabs custom voice</label>
   <select
   id="elevenlabs-voice-select"
-  value={selectedElevenLabsVoice || (hasVoiceClone ? userVoiceCloneId || "" : "")}
+  value={selectedElevenLabsVoice || ""}
   onChange={(event) => {
   const voiceId = event.target.value;
   setSelectedElevenLabsVoice(voiceId);
@@ -2375,6 +2369,7 @@ export default function TalkToMyself() {
   className="w-full rounded-md border border-current/20 bg-white px-2 py-1.5 text-sm"
   aria-label="Choose an ElevenLabs custom voice"
   >
+  <option value="">Default ElevenLabs voice</option>
   {hasVoiceClone && userVoiceCloneId && <option value={userVoiceCloneId}>My voice clone ({userVoiceCloneId.slice(0, 3)})</option>}
   {elevenLabsVoices.map((voice) => {
     const displayName = voice.name
