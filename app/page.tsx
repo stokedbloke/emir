@@ -2784,11 +2784,15 @@ export default function TalkToMyself() {
                       </div>
                       <span>Your Journey</span>
                     </CardTitle>
-                    <CardDescription className="text-gray-600 text-lg">
-                      A collection of your reflections and growth over time
+                      <CardDescription className="text-gray-600 text-lg">
+                      Your reflections, grouped into connected threads so each follow-up stays with the synthesis it responds to.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="p-8">
+                    <div className="mb-5 flex items-center gap-3 rounded-xl border border-purple-100 bg-purple-50/70 px-4 py-3 text-sm text-purple-800">
+                      <span className="h-3 w-3 rounded-full bg-purple-500" aria-hidden="true" />
+                      <span><strong>One reflection thread</strong> — follow-ups are indented and labeled below the original reflection.</span>
+                    </div>
                     <div className="space-y-6">
                       {sessions.filter(s => s.transcript).map((session, index) => (
                         <div
@@ -2804,13 +2808,13 @@ export default function TalkToMyself() {
                         >
                           <div className="flex justify-between items-start">
                             <div className="flex-1">
-                              <div className="flex items-center space-x-3 mb-3">
-                                {session.parentSessionId && (
-                                  <span className="text-xs font-medium text-purple-600">Follow-up reflection</span>
-                                )}
-                                <Badge variant="outline" className="text-xs">
-                                  Session {sessions.length - index}
-                                </Badge>
+                              <div className="flex items-center gap-3 mb-3">
+                                <span className="inline-flex items-center rounded-full bg-purple-100 px-3 py-1 text-xs font-semibold text-purple-700">
+                                  {session.parentSessionId ? "Follow-up reflection" : "Original reflection"}
+                                </span>
+                                <span className="text-sm text-gray-500">
+                                  {session.threadId ? `Thread ${session.threadId.slice(0, 6)}` : "Reflection thread"}
+                                </span>
                                 <span className="text-sm text-gray-500">
                                   {session.timestamp.toLocaleDateString("en-US", {
                                     month: "short",
