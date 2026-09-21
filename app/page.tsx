@@ -542,9 +542,13 @@ export default function TalkToMyself() {
 
 
 
-  const startRecording = async () => {
-    if (isSpeaking) return;
-
+  const startRecording = async (mode: "new" | "follow-up" = "new") => {
+  if (mode === "new") {
+  followUpParentRef.current = null;
+  setActiveThreadId(null);
+  }
+  if (isSpeaking) return;
+  
     // Re-acquire stream if it was released (e.g., after previous stop or cleanup)
     if (!streamRef.current) {
       try {
@@ -2122,7 +2126,7 @@ export default function TalkToMyself() {
                     {/* Recording Button */}
                     <div className="relative">
                       <Button
-                        onClick={isRecording ? stopRecording : startRecording}
+                        onClick={isRecording ? stopRecording : () => startRecording()}
                         disabled={isProcessing || isAudioReady}
                         size="lg"
                         className={cn(
@@ -2437,9 +2441,9 @@ export default function TalkToMyself() {
                               threadId: currentSession.threadId || currentSession.id,
                               parentSessionId: currentSession.id,
                             };
-                            setActiveTab("record");
-                            await startRecording();
-                          }}
+  setActiveTab("record");
+  await startRecording("follow-up");
+  }}
                           className="size-12 rounded-full border-purple-200 bg-purple-50 text-purple-600 shadow-sm hover:bg-purple-100"
                         >
                           <Mic data-icon="inline-start" />
@@ -2769,12 +2773,21 @@ export default function TalkToMyself() {
                       <span><strong>One reflection thread</strong> — follow-ups are indented and labeled below the original reflection.</span>
                     </div>
                     <div className="space-y-6">
-                      {sessions.filter(s => s.transcript).map((session, index) => (
+                      {sessions.filter(s => s.transcript).map((session, index, visibleSessions) => (
                         <div
                           key={session.id}
                           className={cn(
+                            "relative",
+                            session.parentSessionId && "ml-8",
+                          )}
+                        >
+                          {session.parentSessionId && visibleSessions[index - 1]?.threadId === session.threadId && (
+                            <div className="absolute -left-4 -top-6 h-6 border-l-2 border-purple-300" aria-hidden="true" />
+                          )}
+                          <div
+                          className={cn(
                             "p-6 rounded-2xl cursor-pointer transition-all duration-300 border-2 relative",
-                            session.parentSessionId && "ml-8 border-l-4 border-l-purple-300",
+                            session.parentSessionId && "border-l-4 border-l-purple-300",
                             currentSession?.id === session.id
                               ? "bg-gradient-to-r from-purple-50 to-pink-50 border-purple-200 shadow-lg"
                               : "bg-white/60 border-gray-200 hover:bg-gradient-to-r hover:from-purple-50 hover:to-pink-50 hover:border-purple-200 hover:shadow-lg",
@@ -2834,6 +2847,7 @@ export default function TalkToMyself() {
                               const s = Math.round(duration % 60);
                               return `${transcriptWords} words | ${summaryWords} words | ${m}:${s.toString().padStart(2, '0')} min`;
                             })()}
+                          </div>
                           </div>
                         </div>
                       ))}
