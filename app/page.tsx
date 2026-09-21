@@ -39,7 +39,7 @@ import {
 import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/use-toast"
 import { v4 as uuidv4 } from 'uuid';
-import { createClient as createSupabaseClient } from '@supabase/supabase-js';
+
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { VocalCharacteristics, EmotionAnalysis, SessionData, GlobalSettings } from "@/types";
 import { API_ENDPOINTS, AUDIO_CONSTANTS, UI_CONSTANTS, DEFAULT_VALUES, SPEECH_TRIGGERS } from "@/constants";
@@ -51,12 +51,6 @@ import { useSettings } from "@/hooks/useSettings";
 import { useServiceStatus } from "@/hooks/useServiceStatus";
 
 
-// Initialize Supabase client for browser use. These values are public and safe to expose.
-// Make sure to set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in your .env and Vercel dashboard.
-const supabase = createSupabaseClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
 
 
 // Add browser detection utilities at the top of the component:

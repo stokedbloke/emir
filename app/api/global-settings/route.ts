@@ -9,13 +9,18 @@
 
 import { createClient } from '@supabase/supabase-js';
 
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+function getSupabase() {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) {
+    throw new Error('Supabase server configuration is missing');
+  }
+  return createClient(url, key);
+}
 
 // GET: Fetch current global settings
 export async function GET() {
+  const supabase = getSupabase();
   const { data, error } = await supabase
     .from('global_settings')
     .select('*')
@@ -29,6 +34,7 @@ export async function GET() {
 
 // PATCH: Update global settings (admin only)
 export async function PATCH(request: Request) {
+  const supabase = getSupabase();
   // Only allow admin (add your own auth check here if needed)
   // For now, assume only admin UI calls this route
 
