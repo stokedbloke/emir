@@ -20,8 +20,12 @@ export async function POST(request: Request) {
     });
     console.log('API received userId:', userId);
     
-    if (!audioBlob || !userId) {
-      return Response.json({ error: "Audio and userId required" }, { status: 400 });
+    if (!audioBlob || !userId || typeof (audioBlob as Blob).arrayBuffer !== 'function' || audioBlob.size === 0) {
+      return Response.json({ error: "A non-empty audio file and userId are required" }, { status: 400 });
+    }
+
+    if (!process.env.ELEVENLABS_API_KEY) {
+      return Response.json({ error: "ElevenLabs API key not configured" }, { status: 500 });
     }
 
     // Convert audio to base64 for ElevenLabs API

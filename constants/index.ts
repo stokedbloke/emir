@@ -28,7 +28,7 @@ export const UI_CONSTANTS = {
 } as const;
 
 export const DEFAULT_VALUES = {
-  ELEVENLABS_VOICE_ID: 'pNInz6obpgDQGcFmaJgB',
+  ELEVENLABS_VOICE_ID: 'SAz9YHcvj6GT2YYXdXww',
   USER_VOICE_CLONE_PREFIX: 'em-voice-clone-',
   ADMIN_SECRET_KEY: 'admin-secret'
 } as const;

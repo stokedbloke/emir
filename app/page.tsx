@@ -103,6 +103,11 @@ export default function TalkToMyself() {
   // Sessions state management - reverted from useSessions hook for simplicity
   const [sessions, setSessions] = useState<SessionData[]>([]);
   const [currentSession, setCurrentSession] = useState<SessionData | null>(null);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [expandedThreadSessions, setExpandedThreadSessions] = useState<Record<string, boolean>>({});
+  const followUpParentRef = useRef<{ threadId: string; parentSessionId: string } | null>(null);
+  const hasExplicitVoiceSelectionRef = useRef(false);
+  const recordingThreadContextRef = useRef<{ threadId?: string; parentSessionId?: string } | null>(null);
 
   // Fetch reflections from API route for the current user
   const fetchReflections = async (userId: string) => {
@@ -131,20 +136,32 @@ export default function TalkToMyself() {
       console.log("Raw reflection data from API:", data);
 
       // Map DB rows to SessionData shape
-      const mappedSessions = (data.reflections || []).map((row: any) => {
+      const reflectionRows = data.reflections || [];
+      const persistedIds = new Set(reflectionRows.map((row: any) => String(row.id)));
+      const mappedSessions = reflectionRows.map((row: any) => {
         console.log("Mapping row:", row);
+        const deviceInfo = typeof row.device_info === "string"
+          ? JSON.parse(row.device_info)
+          : (row.device_info || {});
+        const persistedParentId = deviceInfo.parent_session_id;
+        const parentSessionId = persistedParentId && persistedIds.has(String(persistedParentId))
+          ? String(persistedParentId)
+          : undefined;
+        const threadId = deviceInfo.thread_id ? String(deviceInfo.thread_id) : String(row.id);
         return {
-          id: row.id,
+          id: String(row.id),
           timestamp: new Date(row.created_at),
           transcript: row.transcript,
           summary: row.summary,
           emotions: row.emotions || [],
           vocalCharacteristics: row.vocal || {},
           audioBlob: undefined, // Not stored in DB
-          recordingDuration: (() => {
+          threadId,
+  parentSessionId,
+  recordingDuration: (() => {
             // New format: duration stored in device_info.recording_duration_seconds
-            if (row.device_info && typeof row.device_info === 'object' && row.device_info.recording_duration_seconds) {
-              return row.device_info.recording_duration_seconds;
+            if (deviceInfo.recording_duration_seconds) {
+              return deviceInfo.recording_duration_seconds;
             }
             // Fallback: return 0 for old records without duration
             return 0;
@@ -167,9 +184,10 @@ export default function TalkToMyself() {
 
   // Save reflection to Supabase
   const saveReflectionToSupabase = async (reflection: any) => {
-    try {
-      console.log("Attempting to save reflection to Supabase:", reflection);
-      const res = await fetch(API_ENDPOINTS.REFLECTION, {
+  try {
+  console.log("Attempting to save reflection to Supabase:", reflection);
+  const res = await fetch(API_ENDPOINTS.REFLECTION, {
+  signal: AbortSignal.timeout(UI_CONSTANTS.API_TIMEOUT_MS),
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(reflection),
@@ -211,8 +229,8 @@ export default function TalkToMyself() {
   const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
   // Removed MAX_SPEECH_ERRORS - no longer penalizing natural speech pauses
   // 🗑️ DEAD CODE: These voice selection variables are set but never used for actual voice selection - can be removed
-  const [selectedElevenLabsVoice, setSelectedElevenLabsVoice] = useState<string>(DEFAULT_VALUES.ELEVENLABS_VOICE_ID);
-  const [elevenLabsVoices, setElevenLabsVoices] = useState<{ id: string, name: string }[]>([]);
+  const [selectedElevenLabsVoice, setSelectedElevenLabsVoice] = useState<string>("");
+  const [elevenLabsVoices, setElevenLabsVoices] = useState<{ id: string, name: string, category?: string }[]>([]);
   const [selectedGoogleLang, setSelectedGoogleLang] = useState<string>("en-US");
   const [selectedGoogleGender, setSelectedGoogleGender] = useState<string>("FEMALE");
   const [selectedHumeVoice, setSelectedHumeVoice] = useState<string>("ITO");
@@ -519,46 +537,47 @@ export default function TalkToMyself() {
     }
   }
 
-  const requestMicrophoneAccess = () => {
-    console.log('requestMicrophoneAccess called, current hasPermission:', hasPermission);
+  const requestMicrophoneAccess = async () => {
+    console.log("requestMicrophoneAccess called, current hasPermission:", hasPermission);
     setIsRequestingMic(true);
     setMicrophoneError(null);
 
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      const errorMsg = "Microphone access is not supported on this device or browser. Please use the latest version of Safari or Chrome on iOS/Android, or try on desktop.";
-      console.error(errorMsg);
-      setMicrophoneError(errorMsg);
+    try {
+      await initializeMicrophone();
+    } catch (error) {
+      console.error("Microphone request failed:", error);
+      setMicrophoneError("Microphone access was unavailable. Please check your browser permissions and try again.");
+    } finally {
       setIsRequestingMic(false);
-      return;
     }
-
-    navigator.mediaDevices.getUserMedia({ audio: true })
-      .then((stream: MediaStream) => {
-        console.log('Microphone access granted, setting up stream');
-        streamRef.current = stream;
-        setHasPermission(true);
-        setIsRequestingMic(false);
-        // You can now proceed to initialize the rest of your audio logic
-        initializeMicrophoneAfterPermission(stream);
-      })
-      .catch((err) => {
-        console.error('Microphone access denied:', err);
-        const errorMsg = "Microphone access denied or unavailable. Please check your browser settings and try again.";
-        setMicrophoneError(errorMsg);
-        setIsRequestingMic(false);
-      });
-  };
-
-  // Separate function for post-permission logic
-  const initializeMicrophoneAfterPermission = (stream: MediaStream) => {
-    // ...rest of your microphone initialization logic that does not require user gesture...
   };
 
 
 
-  const startRecording = async () => {
-    if (isSpeaking) return;
-
+  const startRecording = async (mode: "new" | "follow-up" = "new") => {
+  if (mode === "new") {
+  followUpParentRef.current = null;
+  recordingThreadContextRef.current = null;
+  setActiveThreadId(null);
+  hasExplicitVoiceSelectionRef.current = false;
+  setSelectedElevenLabsVoice("");
+  } else {
+  const selectedParent = followUpParentRef.current;
+  const parentExists = selectedParent?.parentSessionId
+    ? sessions.some((session) => session.id === selectedParent.parentSessionId)
+    : false;
+  if (!selectedParent?.threadId || !selectedParent.parentSessionId || !parentExists) {
+    toast({
+      title: "Choose a reflection first",
+      description: "Select the reflection this follow-up responds to before recording.",
+      variant: "destructive",
+    });
+    return;
+  }
+  recordingThreadContextRef.current = selectedParent;
+  }
+  if (isSpeaking) return;
+  
     // Re-acquire stream if it was released (e.g., after previous stop or cleanup)
     if (!streamRef.current) {
       try {
@@ -928,13 +947,19 @@ export default function TalkToMyself() {
       // Remove trigger phrase from the end of the transcript
       const triggers = SPEECH_TRIGGERS;
       for (const trigger of triggers) {
-        if (transcript.toLowerCase().endsWith(trigger)) {
-          transcript = transcript.slice(0, transcript.toLowerCase().lastIndexOf(trigger)).trim();
+        const triggerPattern = new RegExp(`(?:^|\\s)${trigger.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}[.!?,\\s]*$`, "i");
+        if (triggerPattern.test(transcript)) {
+          transcript = transcript.replace(triggerPattern, "").trim();
           break;
         }
       }
       console.log("Transcript (trigger removed):", transcript);
       if (!transcript || transcript.trim() === "") {
+        toast({
+          title: "No reflection content detected",
+          description: "Say your reflection before saying ‘I am complete’.",
+          variant: "destructive",
+        });
         setIsProcessing(false);
         setProcessingStage("");
         setProgress(0);
@@ -967,10 +992,11 @@ export default function TalkToMyself() {
       // Start TTS generation in parallel while we process the results
       // This reduces perceived wait time by starting audio generation early
       let ttsPromise: Promise<void> | null = null;
-      if (globalSettings?.tts_service === 'elevenlabs' && globalSettings?.elevenlabs_voice_id) {
-        // Start TTS generation immediately after we have the summary
-        ttsPromise = speakSummary(trimmedSummary);
-      }
+  if (globalSettings?.tts_service === 'elevenlabs' && (selectedElevenLabsVoice || globalSettings?.elevenlabs_voice_id)) {
+  // Start TTS generation immediately after we have the summary, using either
+  // the selected generated voice or the configured voice.
+  ttsPromise = speakSummary(trimmedSummary);
+  }
       const lowerSummary = trimmedSummary.toLowerCase();
       if (
         !trimmedSummary ||
@@ -994,7 +1020,7 @@ export default function TalkToMyself() {
       console.log("Red bubble timer shows:", recordingDuration, "seconds");
 
       const newSession: SessionData = {
-        id: Date.now().toString(),
+        id: crypto.randomUUID(),
         timestamp: new Date(), // Just use current time
         transcript,
         summary,
@@ -1009,7 +1035,12 @@ export default function TalkToMyself() {
         audioBlob,
         // Store the actual duration from the red bubble timer
         recordingDuration: recordingDuration,
+        threadId: recordingThreadContextRef.current?.threadId || crypto.randomUUID(),
+        parentSessionId: recordingThreadContextRef.current?.parentSessionId,
       }
+      followUpParentRef.current = null
+      recordingThreadContextRef.current = null
+      setActiveThreadId(newSession.threadId || null)
 
       setSessions((prev) => [newSession, ...prev])
       setCurrentSession(newSession)
@@ -1054,13 +1085,18 @@ export default function TalkToMyself() {
             }
 
             const reflectionData = {
+              id: newSession.id,
               userId,
               transcript,
               summary,
               emotions,
               vocal: vocalCharacteristics,
-              device_info: getDeviceInfo(),
-              browser_info: getBrowserInfo(),
+  device_info: {
+    ...getDeviceInfo(),
+    thread_id: newSession.threadId,
+    parent_session_id: newSession.parentSessionId,
+  },
+  browser_info: getBrowserInfo(),
               location_info: null, // Could add geolocation if needed
               tts_service_used: actualTTSService,
               summary_service_used: globalSettings?.summary_service || 'unknown',
@@ -1075,9 +1111,14 @@ export default function TalkToMyself() {
           }
         })();
       }
-    } catch (error) {
-      console.error("Processing error:", error)
-    } finally {
+  } catch (error) {
+  console.error("Processing error:", error)
+  toast({
+  title: "Summary generation failed",
+  description: error instanceof Error ? error.message : "Gemini could not summarize this reflection.",
+  variant: "destructive",
+  });
+  } finally {
       setIsProcessing(false)
       setProcessingStage("")
       setProgress(0)
@@ -1201,17 +1242,13 @@ export default function TalkToMyself() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           transcript,
-          service: globalSettings?.summary_service, // <--- use this!
+          service: globalSettings?.summary_service || "gemini",
         }),
       })
       console.log('Summary API response status:', response.status);
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        // Don't show invasive error - just log and fallback gracefully
-        console.warn('Summary API failed, using transcript as fallback');
-        const fallbackSummary = transcript ? `I said: "${transcript}"` : "";
-        console.log('Fallback summary generated:', fallbackSummary);
-        return fallbackSummary;
+        throw new Error(errorData.details || errorData.error || `Summary API failed (${response.status})`);
       }
 
       const data = await response.json()
@@ -1226,19 +1263,13 @@ export default function TalkToMyself() {
         summary.toLowerCase().includes("original text") ||
         summary.length < 10 // Too short to be meaningful
       ) {
-        console.warn('Summary appears to be a stub, using transcript as fallback');
-        const fallbackSummary = transcript ? `I said: "${transcript}"` : "";
-        console.log('Fallback summary generated:', fallbackSummary);
-        return fallbackSummary;
+        throw new Error("Gemini returned an unusable summary");
       }
 
       return summary;
     } catch (error) {
-      // On error, fallback to transcript or nothing
-      console.warn('Summary generation error, using transcript as fallback');
-      const fallbackSummary = transcript ? `I said: "${transcript}"` : "";
-      console.log('Fallback summary generated:', fallbackSummary);
-      return fallbackSummary;
+      console.error("Summary generation failed:", error);
+      throw error;
     }
   }
 
@@ -1462,18 +1493,27 @@ export default function TalkToMyself() {
         const res = await fetch(API_ENDPOINTS.VOICE_ELEVENLABS_VOICES);
         if (res.ok) {
           const data = await res.json();
-          setElevenLabsVoices(data.voices.map((v: any) => ({ id: v.voice_id, name: v.name })));
-          if (data.voices.length > 0) setSelectedElevenLabsVoice(data.voices[0].voice_id);
+          const customVoices = (data.voices || [])
+            .filter((v: any) => v.category === "cloned" || v.category === "generated" || v.category === "professional")
+            .map((v: any) => ({ id: v.voice_id, name: v.name, category: v.category }));
+          setElevenLabsVoices(customVoices);
+
         }
       } catch (e) {
         console.warn("Failed to fetch ElevenLabs voices", e);
       }
     };
     fetchVoices();
-  }, []);
+  }, [globalSettings?.elevenlabs_voice_id]);
 
-
-
+  // A new reflection starts with the default ElevenLabs voice. Generated voices
+  // remain available through the selector and only apply after explicit choice.
+  useEffect(() => {
+  hasExplicitVoiceSelectionRef.current = false;
+  setSelectedElevenLabsVoice("");
+  }, [currentSession?.id]);
+  
+  
   const handleDeleteVoiceClone = async () => {
     try {
       if (userVoiceCloneId) {
@@ -1579,7 +1619,11 @@ export default function TalkToMyself() {
           const data = await response.json();
           console.log('Voice clone improved successfully:', data);
 
-          // Update the voice clone ID (ElevenLabs returns a new ID for improved clones)
+          if (typeof data.voiceId !== 'string' || !data.voiceId) {
+            throw new Error('Voice clone replacement returned no voice ID');
+          }
+
+          // Update the voice clone ID only after ElevenLabs confirms the replacement.
           setUserVoiceCloneId(data.voiceId);
           setHasVoiceClone(true);
           localStorage.setItem(`${DEFAULT_VALUES.USER_VOICE_CLONE_PREFIX}${userId}`, data.voiceId);
@@ -1609,12 +1653,16 @@ export default function TalkToMyself() {
           const data = await response.json();
           console.log('Voice clone created successfully:', data);
 
+          if (typeof data.voiceId !== 'string' || !data.voiceId) {
+            throw new Error('Voice clone creation returned no voice ID');
+          }
+
           setUserVoiceCloneId(data.voiceId);
           setHasVoiceClone(true);
           localStorage.setItem(`${DEFAULT_VALUES.USER_VOICE_CLONE_PREFIX}${userId}`, data.voiceId);
 
           toast({
-            title: "Voice clone created! 🎉",
+            title: "Voice clone created!",
             description: "Your voice clone is ready! Click 'Listen' to hear your reflection in your own voice.",
           });
         } else {
@@ -1713,11 +1761,12 @@ export default function TalkToMyself() {
       elevenlabs_voice_id: globalSettings?.elevenlabs_voice_id
     });
 
-    // Check if user has a voice clone and use it (this should work on both mobile and desktop)
-    console.log('Voice clone check:', { userVoiceCloneId, hasVoiceClone, isMobile: /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) });
-    if (userVoiceCloneId && hasVoiceClone) {
-      try {
-        const payload = { text: summary, voiceId: userVoiceCloneId };
+  // A selected ElevenLabs custom voice takes precedence over the locally-created clone.
+  const activeCustomVoiceId = hasExplicitVoiceSelectionRef.current ? selectedElevenLabsVoice || null : null;
+  console.log('Voice selection:', { activeCustomVoiceId, hasVoiceClone, userVoiceCloneId });
+  if (activeCustomVoiceId) {
+  try {
+  const payload = { text: summary, voiceId: activeCustomVoiceId };
         console.log('Using voice clone for TTS:', payload);
         const response = await fetch(API_ENDPOINTS.VOICE_ELEVENLABS, {
           method: "POST",
@@ -1736,9 +1785,8 @@ export default function TalkToMyself() {
             status: response.status
           });
 
-          if (audioBlob.size === 0) {
-            console.warn('Voice clone has no audio data, falling back to default voice');
-            // Don't set error - just fall through silently
+          if (audioBlob.size === 0 || !audioBlob.type.includes('audio')) {
+            throw new Error('ElevenLabs returned an empty audio response');
           } else {
             setActualTTSService("elevenlabs");
             console.log('Voice clone TTS successful, playing audio - actualTTSService set to elevenlabs');
@@ -1747,19 +1795,20 @@ export default function TalkToMyself() {
           }
         } else {
           const errorText = await response.text().catch(() => 'Unknown error');
-          console.warn('Voice clone TTS failed, falling back to default voice:', errorText);
-          // Don't set error - just fall through silently
+          throw new Error(`Voice clone TTS failed: ${response.status} - ${errorText}`);
         }
       } catch (err) {
-        console.warn('Voice clone TTS error, falling back to default voice:', err);
-        // Don't set error - just fall through silently
+        console.error('[v0] Voice clone TTS failed:', err);
+        toast({ title: 'Voice clone playback failed', description: 'The cloned voice could not be synthesized. Check the voice in ElevenLabs and try replacing it.', variant: 'destructive' });
+        setIsSpeaking(false);
+        return;
       }
     }
 
     // Fallback to default ElevenLabs voice if configured
     if (globalSettings?.tts_service === 'elevenlabs') {
       try {
-        const payload = { text: summary, voiceId: globalSettings.elevenlabs_voice_id || DEFAULT_VALUES.ELEVENLABS_VOICE_ID };
+        const payload = { text: summary, voiceId: selectedElevenLabsVoice || DEFAULT_VALUES.ELEVENLABS_VOICE_ID };
         console.log('Sending ElevenLabs TTS payload:', payload);
         const response = await fetch(API_ENDPOINTS.VOICE_ELEVENLABS, {
           method: "POST",
@@ -1778,14 +1827,16 @@ export default function TalkToMyself() {
         await playAudioBlob(audioBlob);
         return;
       } catch (err) {
-        console.warn('Falling back to browser TTS: ElevenLabs TTS error:', err);
-        // Don't return here - fall through to browser TTS
+        console.error('[v0] ElevenLabs TTS failed:', err);
+        toast({ title: 'ElevenLabs playback failed', description: 'No browser voice was used. Check ElevenLabs configuration and try again.', variant: 'destructive' });
+        setIsSpeaking(false);
+        return;
       }
     }
-    // ...repeat for other services if needed...
+    // Browser TTS is only used when the user explicitly selected it.
 
-    // Fallback: Browser TTS
-    if ("speechSynthesis" in window) {
+    // Fallback: Browser TTS only when explicitly selected.
+    if (ttsService !== 'elevenlabs' && "speechSynthesis" in window) {
       setActualTTSService("browser");
       console.log('Falling back to browser TTS - actualTTSService set to browser');
       const utterance = new SpeechSynthesisUtterance(summary);
@@ -1948,12 +1999,43 @@ export default function TalkToMyself() {
     )
   }
 
+  const journeySessions = (() => {
+    const reflectionSessions = sessions.filter((session) => session.transcript);
+    const byParent = new Map<string, SessionData[]>();
+    const validIds = new Set(reflectionSessions.map((session) => session.id));
+    for (const session of reflectionSessions) {
+      const parent = session.parentSessionId
+        ? reflectionSessions.find((candidate) => candidate.id === session.parentSessionId)
+        : undefined;
+      if (
+        parent &&
+        session.threadId === parent.threadId
+      ) {
+        const children = byParent.get(parent.id) || [];
+        children.push(session);
+        byParent.set(parent.id, children);
+      }
+    }
+    const ordered: SessionData[] = [];
+    const appendThread = (root: SessionData) => {
+      ordered.push(root);
+      const descendants = byParent.get(root.id) || [];
+      descendants.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+      descendants.forEach(appendThread);
+    };
+    reflectionSessions
+      .filter((session) => !session.parentSessionId || !validIds.has(session.parentSessionId))
+      .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
+      .forEach(appendThread);
+    return ordered;
+  })();
+
   // Place this BEFORE your return (
   const visibleTabs =
-    1 + // record
-    (currentSession ? 3 : 0) +
-    (sessions.filter(s => s.transcript).length > 0 ? 1 : 0) +
-    (isAdmin ? 1 : 0);
+  1 +
+  (currentSession ? 3 : 0) +
+  (sessions.filter(s => s.transcript).length > 0 ? 1 : 0) +
+  (isAdmin ? 1 : 0);
 
   // handleGlobalSettingsChange is now provided by useSettings hook
 
@@ -2102,7 +2184,7 @@ export default function TalkToMyself() {
                     {/* Recording Button */}
                     <div className="relative">
                       <Button
-                        onClick={isRecording ? stopRecording : startRecording}
+                        onClick={isRecording ? stopRecording : () => startRecording()}
                         disabled={isProcessing || isAudioReady}
                         size="lg"
                         className={cn(
@@ -2268,7 +2350,7 @@ export default function TalkToMyself() {
                               speakSummary(currentSession.summary);
                             }
                           }}
-                          disabled={!currentSession?.summary}
+                          disabled={isProcessing || isRecording || !currentSession?.summary}
                           className={cn(
                             "flex items-center space-x-2 rounded-xl px-6 py-3 transition-all duration-300",
                             isSpeaking
@@ -2330,25 +2412,38 @@ export default function TalkToMyself() {
                         </Tooltip>
 
                         {/* Voice Clone Status Display */}
-                        {hasVoiceClone && userVoiceCloneId && (
-                          <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded-lg text-sm text-green-800">
-                            <div className="flex items-center justify-between">
-                              <span>Your voice clone is active</span>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <span className="text-xs text-green-600 cursor-help underline">
-                                    Voice ID: {userVoiceCloneId.substring(0, 8)}...
-                                  </span>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  <p>Full Voice ID: {userVoiceCloneId}</p>
-                                  <p className="text-xs text-gray-400 mt-1">Check this ID in your ElevenLabs account</p>
-                                </TooltipContent>
-                              </Tooltip>
-                            </div>
-                          </div>
-                        )}
-
+  {elevenLabsVoices.length > 0 && (
+  <div className={`mt-2 p-2 rounded-lg text-sm ${hasVoiceClone && userVoiceCloneId ? "bg-green-50 border border-green-200 text-green-800" : "bg-blue-50 border border-blue-200 text-blue-800"}`}>
+  <div className="flex flex-col gap-2">
+  <div className="flex items-center justify-between gap-3">
+  <span>{hasVoiceClone && userVoiceCloneId ? (selectedElevenLabsVoice && selectedElevenLabsVoice !== userVoiceCloneId ? "Custom ElevenLabs voice selected" : "Your voice clone is active") : "Choose a generated voice for synthesis"}</span>
+  {!hasVoiceClone && <span className="text-xs text-blue-600">No clone required</span>}
+  </div>
+  <label className="sr-only" htmlFor="elevenlabs-voice-select">Choose an ElevenLabs custom voice</label>
+  <select
+  id="elevenlabs-voice-select"
+  value={selectedElevenLabsVoice || ""}
+  onChange={(event) => {
+  const voiceId = event.target.value;
+  hasExplicitVoiceSelectionRef.current = Boolean(voiceId);
+  setSelectedElevenLabsVoice(voiceId);
+  if (userId) localStorage.setItem(`em-elevenlabs-voice-${userId}`, voiceId);
+  }}
+  className="w-full rounded-md border border-current/20 bg-white px-2 py-1.5 text-sm"
+  aria-label="Choose an ElevenLabs custom voice"
+  >
+  <option value="">Default ElevenLabs voice</option>
+  {hasVoiceClone && userVoiceCloneId && <option value={userVoiceCloneId}>My voice clone ({userVoiceCloneId.slice(0, 3)})</option>}
+  {elevenLabsVoices.map((voice) => {
+    const displayName = voice.name
+      .replace(/^(User Voice Clone - )([a-z0-9]{3})[a-z0-9-]*/i, "$1$2")
+      .replace(/^user_([a-z0-9]{3})[a-z0-9-]*/i, "user_$1");
+    return <option key={voice.id} value={voice.id}>{displayName}</option>;
+  })}
+  </select>
+  </div>
+  </div>
+  )}
                         {/* Voice Clone Error Display - only show when there's an actual error */}
                         {voiceCloneError && !hasVoiceClone && (
                           <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-800">
@@ -2392,9 +2487,67 @@ export default function TalkToMyself() {
                           )}
                         </blockquote>
                       </div>
+                      <div className="mt-8 flex flex-col items-center gap-3 border-t border-purple-100 pt-6">
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          aria-label="Record a follow-up reflection"
+                          title="Record a follow-up reflection"
+                          disabled={isRecording || isProcessing || isSpeaking || !currentSession.summary}
+                          onClick={async () => {
+                            setActiveThreadId(currentSession.threadId || currentSession.id);
+                            followUpParentRef.current = {
+                              threadId: currentSession.threadId || currentSession.id,
+                              parentSessionId: currentSession.id,
+                            };
+  setActiveTab("record");
+  await startRecording("follow-up");
+  }}
+                          className="size-12 rounded-full border-purple-200 bg-purple-50 text-purple-600 shadow-sm hover:bg-purple-100"
+                        >
+                          <Mic data-icon="inline-start" />
+                        </Button>
+                        <span className="text-sm font-medium text-purple-700">Reflect on this synthesis</span>
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
+                {currentSession && (() => {
+                  const threadId = currentSession.threadId || currentSession.id;
+                  const threadSessions = sessions
+                    .filter((session) => (session.threadId || session.id) === threadId && session.id !== currentSession.id)
+                    .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+                  if (threadSessions.length === 0) return null;
+                  return (
+                    <Card className="border-purple-100 bg-white/60 shadow-lg">
+                      <CardHeader className="pb-3">
+                        <CardTitle className="text-base text-purple-800">Earlier in this reflection thread</CardTitle>
+                        <CardDescription>Expand a previous synthesis to revisit what was read before this follow-up.</CardDescription>
+                      </CardHeader>
+                      <CardContent className="flex flex-col gap-3 pt-0">
+                        {threadSessions.map((session) => {
+                          const expanded = expandedThreadSessions[session.id] ?? false;
+                          return (
+                            <div key={session.id} className="rounded-xl border border-purple-100 bg-purple-50/50">
+                              <button
+                                type="button"
+                                className="flex w-full items-center justify-between gap-4 p-4 text-left"
+                                aria-expanded={expanded}
+                                onClick={() => setExpandedThreadSessions((previous) => ({ ...previous, [session.id]: !expanded }))}
+                              >
+                                <span className="text-sm font-medium text-gray-700">
+                                  {session.timestamp.toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                                </span>
+                                <span className="text-sm font-medium text-purple-700">{expanded ? "Hide synthesis" : "Show synthesis"}</span>
+                              </button>
+                              {expanded && <p className="border-t border-purple-100 px-4 pb-4 pt-3 text-gray-700 leading-relaxed">{session.summary}</p>}
+                            </div>
+                          );
+                        })}
+                      </CardContent>
+                    </Card>
+                  );
+                })()}
                 {currentSession && (
                   <div className="flex items-center space-x-2 mt-2">
                     <Badge variant="secondary">
@@ -2659,7 +2812,7 @@ export default function TalkToMyself() {
             )} */}
 
             {/* History Tab */}
-            {sessions.filter(s => s.transcript).length > 0 && (
+            {journeySessions.length > 0 && (
               <TabsContent value="history" className="space-y-8">
                 <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
                   <CardHeader className="bg-gradient-to-r from-amber-50 to-orange-50 p-8">
@@ -2669,17 +2822,30 @@ export default function TalkToMyself() {
                       </div>
                       <span>Your Journey</span>
                     </CardTitle>
-                    <CardDescription className="text-gray-600 text-lg">
-                      A collection of your reflections and growth over time
+                      <CardDescription className="text-gray-600 text-lg">
+                      Your reflections
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="p-8">
-                    <div className="space-y-6">
-                      {sessions.filter(s => s.transcript).map((session, index) => (
+  <div className="space-y-6">
+                      {journeySessions.map((session) => (
                         <div
                           key={session.id}
                           className={cn(
-                            "p-6 rounded-2xl cursor-pointer transition-all duration-300 border-2",
+                            "relative",
+                            session.parentSessionId && "ml-8 pl-6",
+                          )}
+                        >
+                          {session.parentSessionId && journeySessions.some((parent) => parent.id === session.parentSessionId && parent.threadId === session.threadId) && (
+                            <div
+                              className="pointer-events-none absolute -left-4 -top-6 h-[calc(100%+1.5rem)] w-4 border-l-2 border-b-2 border-purple-400 rounded-bl-xl"
+                              aria-hidden="true"
+                            />
+                          )}
+                          <div
+                          className={cn(
+                            "p-6 rounded-2xl cursor-pointer transition-all duration-300 border-2 relative",
+                            session.parentSessionId && "border-l-4 border-l-purple-300",
                             currentSession?.id === session.id
                               ? "bg-gradient-to-r from-purple-50 to-pink-50 border-purple-200 shadow-lg"
                               : "bg-white/60 border-gray-200 hover:bg-gradient-to-r hover:from-purple-50 hover:to-pink-50 hover:border-purple-200 hover:shadow-lg",
@@ -2688,10 +2854,10 @@ export default function TalkToMyself() {
                         >
                           <div className="flex justify-between items-start">
                             <div className="flex-1">
-                              <div className="flex items-center space-x-3 mb-3">
-                                <Badge variant="outline" className="text-xs">
-                                  Session {sessions.length - index}
-                                </Badge>
+                              <div className="flex items-center gap-3 mb-3">
+                                <span className="inline-flex items-center rounded-full bg-purple-100 px-3 py-1 text-xs font-semibold text-purple-700">
+                                  {session.parentSessionId ? "Follow-up reflection" : "Original reflection"}
+                                </span>
                                 <span className="text-sm text-gray-500">
                                   {session.timestamp.toLocaleDateString("en-US", {
                                     month: "short",
@@ -2736,6 +2902,7 @@ export default function TalkToMyself() {
                               const s = Math.round(duration % 60);
                               return `${transcriptWords} words | ${summaryWords} words | ${m}:${s.toString().padStart(2, '0')} min`;
                             })()}
+                          </div>
                           </div>
                         </div>
                       ))}
@@ -2798,9 +2965,11 @@ export default function TalkToMyself() {
                         value={globalSettings?.elevenlabs_voice_id || ''}
                         onChange={e => handleGlobalSettingsChange({ elevenlabs_voice_id: e.target.value })}
                       >
-                        {elevenLabsVoices.map(v => (
-                          <option key={v.id} value={v.id}>{v.name}</option>
-                        ))}
+  {elevenLabsVoices.map(v => (
+  <option key={v.id} value={v.id}>{v.name
+  .replace(/^(User Voice Clone - )([a-z0-9]{3})[a-z0-9-]*/i, "$1$2")
+  .replace(/^user_([a-z0-9]{3})[a-z0-9-]*/i, "user_$1")}</option>
+  ))}
                       </select>
                       <label>Hume Voice</label>
                       <input
