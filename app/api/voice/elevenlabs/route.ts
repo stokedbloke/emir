@@ -10,8 +10,12 @@ export async function POST(request: Request) {
     // Parse text and voiceId from request body
     const { text, voiceId = "pNInz6obpgDQGcFmaJgB" } = await request.json()
     
-    console.log('ElevenLabs request payload:', { text, voiceId });
-    if (!text) {
+    if (typeof text !== "string" || !text.trim() || typeof voiceId !== "string" || !voiceId.trim()) {
+      return Response.json({ error: "Text and a valid voiceId are required" }, { status: 400 })
+    }
+
+    console.log('[v0] ElevenLabs request payload:', { textLength: text.length, voiceId });
+    if (!text.trim()) {
       return Response.json({ error: "Text is required" }, { status: 400 })
     }
 
@@ -33,7 +37,7 @@ export async function POST(request: Request) {
       },
       body: JSON.stringify({
         text,
-        model_id: "eleven_monolingual_v1",
+        model_id: "eleven_multilingual_v2",
         voice_settings: {
           stability: 0.5,
           similarity_boost: 0.5,

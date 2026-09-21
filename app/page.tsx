@@ -1579,7 +1579,11 @@ export default function TalkToMyself() {
           const data = await response.json();
           console.log('Voice clone improved successfully:', data);
 
-          // Update the voice clone ID (ElevenLabs returns a new ID for improved clones)
+          if (typeof data.voiceId !== 'string' || !data.voiceId) {
+            throw new Error('Voice clone replacement returned no voice ID');
+          }
+
+          // Update the voice clone ID only after ElevenLabs confirms the replacement.
           setUserVoiceCloneId(data.voiceId);
           setHasVoiceClone(true);
           localStorage.setItem(`${DEFAULT_VALUES.USER_VOICE_CLONE_PREFIX}${userId}`, data.voiceId);
@@ -1609,12 +1613,16 @@ export default function TalkToMyself() {
           const data = await response.json();
           console.log('Voice clone created successfully:', data);
 
+          if (typeof data.voiceId !== 'string' || !data.voiceId) {
+            throw new Error('Voice clone creation returned no voice ID');
+          }
+
           setUserVoiceCloneId(data.voiceId);
           setHasVoiceClone(true);
           localStorage.setItem(`${DEFAULT_VALUES.USER_VOICE_CLONE_PREFIX}${userId}`, data.voiceId);
 
           toast({
-            title: "Voice clone created! 🎉",
+            title: "Voice clone created!",
             description: "Your voice clone is ready! Click 'Listen' to hear your reflection in your own voice.",
           });
         } else {
@@ -1736,9 +1744,8 @@ export default function TalkToMyself() {
             status: response.status
           });
 
-          if (audioBlob.size === 0) {
-            console.warn('Voice clone has no audio data, falling back to default voice');
-            // Don't set error - just fall through silently
+          if (audioBlob.size === 0 || !audioBlob.type.includes('audio')) {
+            throw new Error('ElevenLabs returned an empty audio response');
           } else {
             setActualTTSService("elevenlabs");
             console.log('Voice clone TTS successful, playing audio - actualTTSService set to elevenlabs');
@@ -1747,12 +1754,13 @@ export default function TalkToMyself() {
           }
         } else {
           const errorText = await response.text().catch(() => 'Unknown error');
-          console.warn('Voice clone TTS failed, falling back to default voice:', errorText);
-          // Don't set error - just fall through silently
+          throw new Error(`Voice clone TTS failed: ${response.status} - ${errorText}`);
         }
       } catch (err) {
-        console.warn('Voice clone TTS error, falling back to default voice:', err);
-        // Don't set error - just fall through silently
+        console.error('[v0] Voice clone TTS failed:', err);
+        toast({ title: 'Voice clone playback failed', description: 'The cloned voice could not be synthesized. Check the voice in ElevenLabs and try replacing it.', variant: 'destructive' });
+        setIsSpeaking(false);
+        return;
       }
     }
 
@@ -1778,14 +1786,16 @@ export default function TalkToMyself() {
         await playAudioBlob(audioBlob);
         return;
       } catch (err) {
-        console.warn('Falling back to browser TTS: ElevenLabs TTS error:', err);
-        // Don't return here - fall through to browser TTS
+        console.error('[v0] ElevenLabs TTS failed:', err);
+        toast({ title: 'ElevenLabs playback failed', description: 'No browser voice was used. Check ElevenLabs configuration and try again.', variant: 'destructive' });
+        setIsSpeaking(false);
+        return;
       }
     }
-    // ...repeat for other services if needed...
+    // Browser TTS is only used when the user explicitly selected it.
 
-    // Fallback: Browser TTS
-    if ("speechSynthesis" in window) {
+    // Fallback: Browser TTS only when explicitly selected.
+    if (ttsService !== 'elevenlabs' && "speechSynthesis" in window) {
       setActualTTSService("browser");
       console.log('Falling back to browser TTS - actualTTSService set to browser');
       const utterance = new SpeechSynthesisUtterance(summary);

@@ -21,11 +21,16 @@ export async function POST(request: NextRequest) {
     const userId = formData.get('userId') as string;
     const voiceId = formData.get('voiceId') as string;
 
-    if (!audio || !userId || !voiceId) {
+    if (!audio || !userId || !voiceId || audio.size === 0) {
       return NextResponse.json(
-        { error: 'Missing required fields: audio, userId, or voiceId' },
+        { error: 'A non-empty audio file, userId, and voiceId are required' },
         { status: 400 }
       );
+    }
+
+    const apiKey = process.env.ELEVENLABS_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json({ error: 'ElevenLabs API key not configured' }, { status: 500 });
     }
 
     console.log('API received formData keys:', Array.from(formData.keys()));
@@ -38,32 +43,8 @@ export async function POST(request: NextRequest) {
     console.log('API received userId:', userId);
     console.log('API received voiceId:', voiceId);
 
-    // First, delete the existing voice clone to prevent accumulation
-    // This ensures we maintain only one voice clone per user
-    console.log('Deleting existing voice clone:', voiceId);
-    const deleteResponse = await fetch(`https://api.elevenlabs.io/v1/voices/${voiceId}`, {
-      method: 'DELETE',
-      headers: {
-        'xi-api-key': process.env.ELEVENLABS_API_KEY!,
-      },
-    });
-
-    if (!deleteResponse.ok) {
-      const deleteError = await deleteResponse.text();
-      console.error('Failed to delete existing voice clone:', deleteError);
-      
-      // Check if the error is because the voice doesn't exist
-      if (deleteError.includes('voice_does_not_exist') || deleteError.includes('voice_not_found')) {
-        console.log('Voice clone does not exist, proceeding to create new one');
-        // Continue with creating a new voice clone instead of failing
-      } else {
-        return NextResponse.json({ error: 'Failed to delete existing voice clone' }, { status: 500 });
-      }
-    }
-
-    console.log('Existing voice clone deleted successfully:', voiceId);
-
-    // Convert audio to base64
+    // Create the replacement first. Deleting first can leave the user with no
+    // usable clone when ElevenLabs rejects the new sample.
     const audioBuffer = await audio.arrayBuffer();
     const base64Audio = Buffer.from(audioBuffer).toString('base64');
     
@@ -107,12 +88,25 @@ export async function POST(request: NextRequest) {
     }
 
     const data = await response.json();
-    console.log('Voice clone improved successfully:', data);
+    const newVoiceId = data.voice_id;
+    if (typeof newVoiceId !== 'string' || !newVoiceId) {
+      return NextResponse.json({ error: 'ElevenLabs returned no voice ID' }, { status: 502 });
+    }
 
+    // Only remove the old clone after the new clone is confirmed.
+    const deleteResponse = await fetch(`https://api.elevenlabs.io/v1/voices/${voiceId}`, {
+      method: 'DELETE',
+      headers: { 'xi-api-key': apiKey },
+    });
+    if (!deleteResponse.ok) {
+      console.warn('[v0] Replacement created, but old clone could not be deleted:', await deleteResponse.text().catch(() => 'unknown error'));
+    }
+
+    console.log('[v0] Voice clone replacement succeeded:', { oldVoiceId: voiceId, newVoiceId });
     return NextResponse.json({
       success: true,
-      voiceId: data.voice_id,
-      message: 'Voice clone improved successfully'
+      voiceId: newVoiceId,
+      message: 'Voice clone replaced successfully'
     });
 
   } catch (error) {
