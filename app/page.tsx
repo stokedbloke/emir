@@ -556,8 +556,13 @@ export default function TalkToMyself() {
   followUpParentRef.current = null;
   recordingThreadContextRef.current = null;
   setActiveThreadId(null);
-  hasExplicitVoiceSelectionRef.current = false;
-  setSelectedElevenLabsVoice("");
+  if (userVoiceCloneId && hasVoiceClone) {
+    hasExplicitVoiceSelectionRef.current = true;
+    setSelectedElevenLabsVoice(userVoiceCloneId);
+  } else {
+    hasExplicitVoiceSelectionRef.current = false;
+    setSelectedElevenLabsVoice("");
+  }
   } else {
   const selectedParent = followUpParentRef.current;
   const parentExists = selectedParent?.parentSessionId
@@ -1709,9 +1714,11 @@ export default function TalkToMyself() {
       elevenlabs_voice_id: globalSettings?.elevenlabs_voice_id
     });
 
-  // A selected ElevenLabs custom voice takes precedence over the locally-created clone.
-  const activeCustomVoiceId = hasExplicitVoiceSelectionRef.current ? selectedElevenLabsVoice || null : null;
-  console.log('Voice selection:', { activeCustomVoiceId, hasVoiceClone, userVoiceCloneId });
+  // A configured clone is always the default. An explicit selector choice may override it.
+  const activeCustomVoiceId = hasVoiceClone && userVoiceCloneId
+    ? (hasExplicitVoiceSelectionRef.current ? selectedElevenLabsVoice || userVoiceCloneId : userVoiceCloneId)
+    : (hasExplicitVoiceSelectionRef.current ? selectedElevenLabsVoice || null : null);
+  console.log('Voice selection:', { activeCustomVoiceId, hasVoiceClone, userVoiceCloneId, selectedElevenLabsVoice });
   if (activeCustomVoiceId) {
   try {
   const payload = { text: summary, voiceId: activeCustomVoiceId };
@@ -1756,7 +1763,7 @@ export default function TalkToMyself() {
     // Fallback to default ElevenLabs voice if configured
     if (globalSettings?.tts_service === 'elevenlabs') {
       try {
-        const payload = { text: summary, voiceId: selectedElevenLabsVoice || DEFAULT_VALUES.ELEVENLABS_VOICE_ID };
+        const payload = { text: summary, voiceId: activeCustomVoiceId || globalSettings?.elevenlabs_voice_id || DEFAULT_VALUES.ELEVENLABS_VOICE_ID };
         console.log('Sending ElevenLabs TTS payload:', payload);
         const response = await fetch(API_ENDPOINTS.VOICE_ELEVENLABS, {
           method: "POST",
