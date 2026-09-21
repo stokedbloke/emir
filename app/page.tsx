@@ -39,7 +39,7 @@ import {
 import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/use-toast"
 import { v4 as uuidv4 } from 'uuid';
-import { createClient as createSupabaseClient } from '@supabase/supabase-js';
+
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { VocalCharacteristics, EmotionAnalysis, SessionData, GlobalSettings } from "@/types";
 import { API_ENDPOINTS, AUDIO_CONSTANTS, UI_CONSTANTS, DEFAULT_VALUES, SPEECH_TRIGGERS } from "@/constants";
@@ -51,12 +51,6 @@ import { useSettings } from "@/hooks/useSettings";
 import { useServiceStatus } from "@/hooks/useServiceStatus";
 
 
-// Initialize Supabase client for browser use. These values are public and safe to expose.
-// Make sure to set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in your .env and Vercel dashboard.
-const supabase = createSupabaseClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
 
 
 // Add browser detection utilities at the top of the component:
@@ -243,6 +237,7 @@ export default function TalkToMyself() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingStage, setProcessingStage] = useState("");
   const [progress, setProgress] = useState(0);
+  const [processingError, setProcessingError] = useState<string | null>(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isAudioReady, setIsAudioReady] = useState(false);
   const [breathingPhase, setBreathingPhase] = useState<"inhale" | "exhale">("inhale");
@@ -607,6 +602,7 @@ export default function TalkToMyself() {
     // Reset light UI state for smooth transition
     setIsAudioReady(false);
     setIsSpeaking(false);
+    setProcessingError(null);
     setProcessingStage("");
     setProgress(0);
 
@@ -955,15 +951,7 @@ export default function TalkToMyself() {
       }
       console.log("Transcript (trigger removed):", transcript);
       if (!transcript || transcript.trim() === "") {
-        toast({
-          title: "No reflection content detected",
-          description: "Say your reflection before saying ‘I am complete’.",
-          variant: "destructive",
-        });
-        setIsProcessing(false);
-        setProcessingStage("");
-        setProgress(0);
-        return;
+        throw new Error(transcriptionError || "No transcript was produced. Your recording was not summarized or saved. Please try again.");
       }
 
       setProcessingStage("Generating your summary...")
@@ -1112,16 +1100,18 @@ export default function TalkToMyself() {
         })();
       }
   } catch (error) {
+  const message = error instanceof Error ? error.message : "The reflection could not be processed.";
   console.error("Processing error:", error)
+  setProcessingError(message);
+  setProcessingStage("Processing failed")
+  setProgress(0)
   toast({
-  title: "Summary generation failed",
-  description: error instanceof Error ? error.message : "Gemini could not summarize this reflection.",
+  title: "Your reflection was not processed",
+  description: message,
   variant: "destructive",
   });
   } finally {
       setIsProcessing(false)
-      setProcessingStage("")
-      setProgress(0)
 
       // Re-acquire mic stream for next recording session
       // This is a background operation and won't prompt the user
@@ -1134,101 +1124,47 @@ export default function TalkToMyself() {
   }
 
   const transcribeAudio = async (audioBlob: Blob): Promise<string> => {
+    const browserTranscript = fullRecognitionTranscriptRef.current.trim() ||
+      ((window as any).lastRecognitionTranscript || "").trim();
+
+    // Browser speech recognition is the primary transcription path. The recorded
+    // blob is only sent to the server when browser recognition produced nothing.
+    if (browserTranscript) {
+      console.log("Using browser speech recognition transcript");
+      setTranscriptionError(null);
+      return browserTranscript;
+    }
+
+    console.warn("Browser speech recognition returned no transcript; trying backup STT");
+    const formData = new FormData();
+    formData.append("audio", audioBlob, "recording.webm");
+    formData.append("service", "google");
+
     try {
-      // Always try Google Speech-to-Text API (if configured on backend)
-      console.log("Using Google Speech-to-Text API for transcription...")
-      const formData = new FormData()
-      formData.append("audio", audioBlob, "recording.webm")
-      formData.append("service", "google")
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), UI_CONSTANTS.API_TIMEOUT_MS);
+      const response = await fetch(API_ENDPOINTS.TRANSCRIBE, {
+        method: "POST",
+        body: formData,
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      const data = await response.json().catch(() => ({}));
+      console.log("Backup STT response status:", response.status);
 
-      try {
-        const controller = new AbortController()
-        const timeoutId = setTimeout(() => controller.abort(), UI_CONSTANTS.API_TIMEOUT_MS)
-
-        const response = await fetch(API_ENDPOINTS.TRANSCRIBE, {
-          method: "POST",
-          body: formData,
-          signal: controller.signal,
-        })
-
-        clearTimeout(timeoutId)
-
-        console.log("Google API response status:", response.status)
-
-        if (response.ok) {
-          const data = await response.json()
-          console.log("Google transcription result:", data)
-          console.log("Google STT raw response:", data)
-
-          if (
-            data.transcript &&
-            data.transcript.trim() !== "" &&
-            data.transcript !== "I voiced my thoughts and reflections in this session."
-          ) {
-            setTranscriptionError(null);
-            return data.transcript;
-          } else {
-            // Fallback to browser transcript if available
-            if ((window as any).lastRecognitionTranscript && (window as any).lastRecognitionTranscript.trim() !== "") {
-              console.warn("Google transcript empty, using browser transcript:", (window as any).lastRecognitionTranscript);
-              // Suppress warning if browser transcript is present
-              setTranscriptionError(null);
-              return (window as any).lastRecognitionTranscript.trim();
-            } else {
-              console.warn("Both Google and browser transcripts are empty.");
-              setTranscriptionError("Both Google and browser transcripts are empty. Please try again.");
-              return "";
-            }
-          }
-        } else {
-          const errorText = await response.text()
-          console.error("Google transcription failed:", errorText)
-          // Only show warning if browser transcript is also empty
-          if ((window as any).lastRecognitionTranscript && (window as any).lastRecognitionTranscript.trim() !== "") {
-            console.warn("Google STT failed, using browser transcript:", (window as any).lastRecognitionTranscript);
-            setTranscriptionError(null);
-            return (window as any).lastRecognitionTranscript.trim();
-          } else {
-            setTranscriptionError(`Google transcription failed: ${errorText}`);
-            console.warn("Google STT failed and browser transcript is empty.");
-            return "";
-          }
-        }
-      } catch (fetchError) {
-        console.log("Google transcription request failed:", fetchError)
-        // Only show warning if browser transcript is also empty
-        if ((window as any).lastRecognitionTranscript && (window as any).lastRecognitionTranscript.trim() !== "") {
-          console.warn("Google STT request failed, using browser transcript:", (window as any).lastRecognitionTranscript);
-          setTranscriptionError(null);
-          return (window as any).lastRecognitionTranscript.trim();
-        } else {
-          setTranscriptionError("Google transcription request failed and browser transcript is empty. Please try again.");
-          console.warn("Google STT request failed and browser transcript is empty.");
-          return "";
-        }
-      }
-
-      if ((window as any).lastRecognitionTranscript && (window as any).lastRecognitionTranscript.trim() !== "") {
-        console.log("Using captured live transcript:", (window as any).lastRecognitionTranscript)
+      if (response.ok && typeof data.transcript === "string" && data.transcript.trim()) {
         setTranscriptionError(null);
-        return (window as any).lastRecognitionTranscript.trim()
+        return data.transcript.trim();
       }
 
-      console.warn("No transcript available, returning fallback.")
-      setTranscriptionError("No transcript available. Please try again.");
-      return "" // No transcript
+      const reason = data.error || data.details || `Backup STT failed (${response.status})`;
+      throw new Error(reason);
     } catch (error) {
-      console.error("Transcription error:", error)
-      // Only show warning if browser transcript is also empty
-      if ((window as any).lastRecognitionTranscript && (window as any).lastRecognitionTranscript.trim() !== "") {
-        console.warn("Transcription error, using browser transcript:", (window as any).lastRecognitionTranscript);
-        setTranscriptionError(null);
-        return (window as any).lastRecognitionTranscript.trim();
-      } else {
-        setTranscriptionError("Transcription error and browser transcript is empty. Please try again.");
-        console.warn("Transcription error and browser transcript is empty.");
-        return "";
-      }
+      const reason = error instanceof Error ? error.message : "Backup STT request failed";
+      const message = `Browser speech recognition returned no transcript, and backup transcription failed: ${reason}`;
+      console.error(message, error);
+      setTranscriptionError(message);
+      throw new Error(message);
     }
   }
 
@@ -2265,9 +2201,17 @@ export default function TalkToMyself() {
                       </div>
                     )}
 
-                    {/* Gentle guidance */}
-                    {!isRecording && !isProcessing && (
-                      <div className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-2xl p-8 max-w-2xl">
+  {processingError && !isProcessing && (
+  <div className="w-full max-w-2xl rounded-2xl border border-red-200 bg-red-50 p-6 text-left" role="alert">
+    <h3 className="font-semibold text-red-900">Your reflection was not processed</h3>
+    <p className="mt-2 text-sm leading-relaxed text-red-800">{processingError}</p>
+    <p className="mt-3 text-sm text-red-700">Your recording was not summarized or saved. Please try recording again. If this happens again, share this message when reporting the issue.</p>
+  </div>
+  )}
+
+  {/* Gentle guidance */}
+  {!isRecording && !isProcessing && !processingError && (
+  <div className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-2xl p-8 max-w-2xl">
                         <div className="flex items-start space-x-4">
                           <div className="w-12 h-12 bg-gradient-to-br from-purple-400 to-pink-500 rounded-full flex items-center justify-center flex-shrink-0">
                             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" className="w-8 h-8">
@@ -2452,7 +2396,7 @@ export default function TalkToMyself() {
                         )}
 
                         {/* Delete Clone Button - only show when voice clone exists */}
-                        {hasVoiceClone && userVoiceCloneId && (
+                        {hasVoiceClone && userVoiceCloneId && selectedElevenLabsVoice && (
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <Button

@@ -9,14 +9,18 @@
 //
 import { createClient } from '@supabase/supabase-js';
 
-// Initialize Supabase client with private keys (never exposed to browser)
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+function getSupabase() {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) {
+    throw new Error('Supabase server configuration is missing');
+  }
+  return createClient(url, key);
+}
 
 export async function POST(request: Request) {
   try {
+    const supabase = getSupabase();
     // Parse the incoming JSON body
     const body = await request.json();
     const { id, userId, transcript, summary, emotions, vocal, recording_duration } = body;

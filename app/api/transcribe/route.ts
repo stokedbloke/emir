@@ -24,7 +24,7 @@ export async function POST(request: Request) {
       // Use Google Cloud Speech-to-Text API (requires GOOGLE_API_KEY)
       const googleApiKey = process.env.GOOGLE_API_KEY
       if (!googleApiKey) {
-        return Response.json({ transcript: "" })
+        return Response.json({ error: "Backup transcription is not configured: GOOGLE_API_KEY is missing." }, { status: 503 })
       }
       
       const response = await fetch(`https://speech.googleapis.com/v1/speech:recognize?key=${googleApiKey}`, {
@@ -50,7 +50,10 @@ export async function POST(request: Request) {
         // Log and return error if Google API fails
         const errorData = await response.json()
         console.error("Google Speech-to-Text error:", errorData)
-        return Response.json({ transcript: "" })
+        return Response.json({
+          error: "Backup transcription provider rejected the recording.",
+          details: errorData?.error?.message || "Google Speech-to-Text request failed",
+        }, { status: response.status })
       }
 
       const data = await response.json()
@@ -68,7 +71,9 @@ export async function POST(request: Request) {
     return Response.json({ transcript: "" })
   } catch (error) {
     console.error("Transcription error:", error)
-    // Always return a fallback response instead of error
-    return Response.json({ transcript: "" })
+    return Response.json({
+      error: "Backup transcription failed unexpectedly.",
+      details: error instanceof Error ? error.message : "Unknown transcription error",
+    }, { status: 500 })
   }
 }
