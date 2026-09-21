@@ -525,39 +525,19 @@ export default function TalkToMyself() {
     }
   }
 
-  const requestMicrophoneAccess = () => {
-    console.log('requestMicrophoneAccess called, current hasPermission:', hasPermission);
+  const requestMicrophoneAccess = async () => {
+    console.log("requestMicrophoneAccess called, current hasPermission:", hasPermission);
     setIsRequestingMic(true);
     setMicrophoneError(null);
 
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      const errorMsg = "Microphone access is not supported on this device or browser. Please use the latest version of Safari or Chrome on iOS/Android, or try on desktop.";
-      console.error(errorMsg);
-      setMicrophoneError(errorMsg);
+    try {
+      await initializeMicrophone();
+    } catch (error) {
+      console.error("Microphone request failed:", error);
+      setMicrophoneError("Microphone access was unavailable. Please check your browser permissions and try again.");
+    } finally {
       setIsRequestingMic(false);
-      return;
     }
-
-    navigator.mediaDevices.getUserMedia({ audio: true })
-      .then((stream: MediaStream) => {
-        console.log('Microphone access granted, setting up stream');
-        streamRef.current = stream;
-        setHasPermission(true);
-        setIsRequestingMic(false);
-        // You can now proceed to initialize the rest of your audio logic
-        initializeMicrophoneAfterPermission(stream);
-      })
-      .catch((err) => {
-        console.error('Microphone access denied:', err);
-        const errorMsg = "Microphone access denied or unavailable. Please check your browser settings and try again.";
-        setMicrophoneError(errorMsg);
-        setIsRequestingMic(false);
-      });
-  };
-
-  // Separate function for post-permission logic
-  const initializeMicrophoneAfterPermission = (stream: MediaStream) => {
-    // ...rest of your microphone initialization logic that does not require user gesture...
   };
 
 
@@ -1996,10 +1976,10 @@ export default function TalkToMyself() {
 
   // Place this BEFORE your return (
   const visibleTabs =
-    1 + // record
-    (currentSession ? 3 : 0) +
-    (sessions.filter(s => s.transcript).length > 0 ? 1 : 0) +
-    (isAdmin ? 1 : 0);
+  1 +
+  (currentSession ? 3 : 0) +
+  (sessions.filter(s => s.transcript).length > 0 ? 1 : 0) +
+  (isAdmin ? 1 : 0);
 
   // handleGlobalSettingsChange is now provided by useSettings hook
 
