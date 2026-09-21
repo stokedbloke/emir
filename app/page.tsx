@@ -140,7 +140,10 @@ export default function TalkToMyself() {
       const persistedIds = new Set(reflectionRows.map((row: any) => String(row.id)));
       const mappedSessions = reflectionRows.map((row: any) => {
         console.log("Mapping row:", row);
-        const persistedParentId = row.device_info?.parent_session_id;
+        const deviceInfo = typeof row.device_info === "string"
+          ? JSON.parse(row.device_info)
+          : (row.device_info || {});
+        const persistedParentId = deviceInfo.parent_session_id;
         const parentSessionId = persistedParentId && persistedIds.has(String(persistedParentId))
           ? String(persistedParentId)
           : undefined;
@@ -152,12 +155,12 @@ export default function TalkToMyself() {
           emotions: row.emotions || [],
           vocalCharacteristics: row.vocal || {},
           audioBlob: undefined, // Not stored in DB
-          threadId: row.device_info?.thread_id || String(row.id),
+          threadId: deviceInfo.thread_id || String(row.id),
   parentSessionId,
   recordingDuration: (() => {
             // New format: duration stored in device_info.recording_duration_seconds
-            if (row.device_info && typeof row.device_info === 'object' && row.device_info.recording_duration_seconds) {
-              return row.device_info.recording_duration_seconds;
+            if (deviceInfo.recording_duration_seconds) {
+              return deviceInfo.recording_duration_seconds;
             }
             // Fallback: return 0 for old records without duration
             return 0;
@@ -2789,7 +2792,7 @@ export default function TalkToMyself() {
                         >
                           {session.parentSessionId && sessions.some((parent) => parent.id === session.parentSessionId) && (
                             <div
-                              className="pointer-events-none absolute -left-4 -top-6 h-6 w-4 border-l-2 border-b-2 border-purple-300 rounded-bl-xl"
+                              className="pointer-events-none absolute -left-4 -top-6 h-[calc(100%+1.5rem)] w-4 border-l-2 border-b-2 border-purple-400 rounded-bl-xl"
                               aria-hidden="true"
                             />
                           )}
