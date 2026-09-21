@@ -167,9 +167,10 @@ export default function TalkToMyself() {
 
   // Save reflection to Supabase
   const saveReflectionToSupabase = async (reflection: any) => {
-    try {
-      console.log("Attempting to save reflection to Supabase:", reflection);
-      const res = await fetch(API_ENDPOINTS.REFLECTION, {
+  try {
+  console.log("Attempting to save reflection to Supabase:", reflection);
+  const res = await fetch(API_ENDPOINTS.REFLECTION, {
+  signal: AbortSignal.timeout(UI_CONSTANTS.API_TIMEOUT_MS),
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(reflection),
@@ -928,13 +929,19 @@ export default function TalkToMyself() {
       // Remove trigger phrase from the end of the transcript
       const triggers = SPEECH_TRIGGERS;
       for (const trigger of triggers) {
-        if (transcript.toLowerCase().endsWith(trigger)) {
-          transcript = transcript.slice(0, transcript.toLowerCase().lastIndexOf(trigger)).trim();
+        const triggerPattern = new RegExp(`(?:^|\\s)${trigger.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}[.!?,\\s]*$`, "i");
+        if (triggerPattern.test(transcript)) {
+          transcript = transcript.replace(triggerPattern, "").trim();
           break;
         }
       }
       console.log("Transcript (trigger removed):", transcript);
       if (!transcript || transcript.trim() === "") {
+        toast({
+          title: "No reflection content detected",
+          description: "Say your reflection before saying ‘I am complete’.",
+          variant: "destructive",
+        });
         setIsProcessing(false);
         setProcessingStage("");
         setProgress(0);
@@ -1480,10 +1487,12 @@ export default function TalkToMyself() {
 
   useEffect(() => {
     const configuredVoiceId = globalSettings?.elevenlabs_voice_id;
-    if (configuredVoiceId && elevenLabsVoices.some((voice) => voice.id === configuredVoiceId)) {
-      setSelectedElevenLabsVoice(configuredVoiceId);
+    const savedVoiceId = userId ? localStorage.getItem(`em-elevenlabs-voice-${userId}`) : null;
+    const preferredVoiceId = savedVoiceId || configuredVoiceId;
+    if (preferredVoiceId && elevenLabsVoices.some((voice) => voice.id === preferredVoiceId)) {
+      setSelectedElevenLabsVoice(preferredVoiceId);
     }
-  }, [globalSettings?.elevenlabs_voice_id, elevenLabsVoices]);
+  }, [globalSettings?.elevenlabs_voice_id, elevenLabsVoices, userId]);
 
 
   const handleDeleteVoiceClone = async () => {
@@ -2369,7 +2378,9 @@ export default function TalkToMyself() {
                                   onChange={(event) => {
                                     const voiceId = event.target.value;
                                     setSelectedElevenLabsVoice(voiceId);
-                                    handleGlobalSettingsChange({ elevenlabs_voice_id: voiceId });
+                                    if (userId) {
+                                      localStorage.setItem(`em-elevenlabs-voice-${userId}`, voiceId);
+                                    }
                                   }}
                                   className="w-full rounded-md border border-green-300 bg-white px-2 py-1.5 text-sm text-green-900"
                                   aria-label="Choose an ElevenLabs custom voice"
