@@ -979,10 +979,11 @@ export default function TalkToMyself() {
       // Start TTS generation in parallel while we process the results
       // This reduces perceived wait time by starting audio generation early
       let ttsPromise: Promise<void> | null = null;
-      if (globalSettings?.tts_service === 'elevenlabs' && globalSettings?.elevenlabs_voice_id) {
-        // Start TTS generation immediately after we have the summary
-        ttsPromise = speakSummary(trimmedSummary);
-      }
+  if (globalSettings?.tts_service === 'elevenlabs' && (selectedElevenLabsVoice || globalSettings?.elevenlabs_voice_id)) {
+  // Start TTS generation immediately after we have the summary, using either
+  // the selected generated voice or the configured voice.
+  ttsPromise = speakSummary(trimmedSummary);
+  }
       const lowerSummary = trimmedSummary.toLowerCase();
       if (
         !trimmedSummary ||
@@ -2375,39 +2376,33 @@ export default function TalkToMyself() {
                         </Tooltip>
 
                         {/* Voice Clone Status Display */}
-                        {hasVoiceClone && userVoiceCloneId && (
-                          <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded-lg text-sm text-green-800">
-                            <div className="flex flex-col gap-2">
-                              <div className="flex items-center justify-between gap-3">
-                                <span>{selectedElevenLabsVoice && selectedElevenLabsVoice !== userVoiceCloneId ? "Custom ElevenLabs voice selected" : "Your voice clone is active"}</span>
-                                <span className="text-xs text-green-600" title={`Full Voice ID: ${selectedElevenLabsVoice || userVoiceCloneId}`}>
-                                  Voice ID: {(selectedElevenLabsVoice || userVoiceCloneId).substring(0, 8)}...
-                                </span>
-                              </div>
-                              <label className="flex items-center gap-2 text-xs text-green-700">
-                                <span className="sr-only">Choose an ElevenLabs custom voice</span>
-                                <select
-                                  value={selectedElevenLabsVoice || userVoiceCloneId}
-                                  onChange={(event) => {
-                                    const voiceId = event.target.value;
-                                    setSelectedElevenLabsVoice(voiceId);
-                                    if (userId) {
-                                      localStorage.setItem(`em-elevenlabs-voice-${userId}`, voiceId);
-                                    }
-                                  }}
-                                  className="w-full rounded-md border border-green-300 bg-white px-2 py-1.5 text-sm text-green-900"
-                                  aria-label="Choose an ElevenLabs custom voice"
-                                >
-                                  <option value={userVoiceCloneId}>My voice clone</option>
-                                  {elevenLabsVoices.map((voice) => (
-                                    <option key={voice.id} value={voice.id}>{voice.name}</option>
-                                  ))}
-                                </select>
-                              </label>
-                            </div>
-                          </div>
-                        )}
-
+  {elevenLabsVoices.length > 0 && (
+  <div className={`mt-2 p-2 rounded-lg text-sm ${hasVoiceClone && userVoiceCloneId ? "bg-green-50 border border-green-200 text-green-800" : "bg-blue-50 border border-blue-200 text-blue-800"}`}>
+  <div className="flex flex-col gap-2">
+  <div className="flex items-center justify-between gap-3">
+  <span>{hasVoiceClone && userVoiceCloneId ? (selectedElevenLabsVoice && selectedElevenLabsVoice !== userVoiceCloneId ? "Custom ElevenLabs voice selected" : "Your voice clone is active") : "Choose a generated voice for synthesis"}</span>
+  {!hasVoiceClone && <span className="text-xs text-blue-600">No clone required</span>}
+  </div>
+  <label className="sr-only" htmlFor="elevenlabs-voice-select">Choose an ElevenLabs custom voice</label>
+  <select
+  id="elevenlabs-voice-select"
+  value={selectedElevenLabsVoice || (hasVoiceClone ? userVoiceCloneId || "" : "")}
+  onChange={(event) => {
+  const voiceId = event.target.value;
+  setSelectedElevenLabsVoice(voiceId);
+  if (userId) localStorage.setItem(`em-elevenlabs-voice-${userId}`, voiceId);
+  }}
+  className="w-full rounded-md border border-current/20 bg-white px-2 py-1.5 text-sm"
+  aria-label="Choose an ElevenLabs custom voice"
+  >
+  {hasVoiceClone && userVoiceCloneId && <option value={userVoiceCloneId}>My voice clone</option>}
+  {elevenLabsVoices.map((voice) => (
+  <option key={voice.id} value={voice.id}>{voice.name}</option>
+  ))}
+  </select>
+  </div>
+  </div>
+  )}
                         {/* Voice Clone Error Display - only show when there's an actual error */}
                         {voiceCloneError && !hasVoiceClone && (
                           <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-800">
