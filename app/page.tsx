@@ -2395,10 +2395,11 @@ export default function TalkToMyself() {
   className="w-full rounded-md border border-current/20 bg-white px-2 py-1.5 text-sm"
   aria-label="Choose an ElevenLabs custom voice"
   >
-  {hasVoiceClone && userVoiceCloneId && <option value={userVoiceCloneId}>My voice clone</option>}
-  {elevenLabsVoices.map((voice) => (
-  <option key={voice.id} value={voice.id}>{voice.name}</option>
-  ))}
+  {hasVoiceClone && userVoiceCloneId && <option value={userVoiceCloneId}>My voice clone ({userVoiceCloneId.slice(0, 3)})</option>}
+  {elevenLabsVoices.map((voice) => {
+    const displayName = voice.name.replace(/([ _-])([^ _-]{3})[^ _-]*/g, "$1$2");
+    return <option key={voice.id} value={voice.id}>{displayName}</option>;
+  })}
   </select>
   </div>
   </div>
@@ -2914,9 +2915,9 @@ export default function TalkToMyself() {
                         value={globalSettings?.elevenlabs_voice_id || ''}
                         onChange={e => handleGlobalSettingsChange({ elevenlabs_voice_id: e.target.value })}
                       >
-                        {elevenLabsVoices.map(v => (
-                          <option key={v.id} value={v.id}>{v.name}</option>
-                        ))}
+  {elevenLabsVoices.map(v => (
+  <option key={v.id} value={v.id}>{v.name.replace(/([ _-])([^ _-]{3})[^ _-]*/g, "$1$2")}</option>
+  ))}
                       </select>
                       <label>Hume Voice</label>
                       <input
