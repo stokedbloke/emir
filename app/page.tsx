@@ -147,6 +147,7 @@ export default function TalkToMyself() {
         const parentSessionId = persistedParentId && persistedIds.has(String(persistedParentId))
           ? String(persistedParentId)
           : undefined;
+        const threadId = deviceInfo.thread_id ? String(deviceInfo.thread_id) : String(row.id);
         return {
           id: String(row.id),
           timestamp: new Date(row.created_at),
@@ -155,7 +156,7 @@ export default function TalkToMyself() {
           emotions: row.emotions || [],
           vocalCharacteristics: row.vocal || {},
           audioBlob: undefined, // Not stored in DB
-          threadId: deviceInfo.thread_id || String(row.id),
+          threadId,
   parentSessionId,
   recordingDuration: (() => {
             // New format: duration stored in device_info.recording_duration_seconds
@@ -2002,10 +2003,16 @@ export default function TalkToMyself() {
     const byParent = new Map<string, SessionData[]>();
     const validIds = new Set(reflectionSessions.map((session) => session.id));
     for (const session of reflectionSessions) {
-      if (session.parentSessionId && validIds.has(session.parentSessionId)) {
-        const children = byParent.get(session.parentSessionId) || [];
+      const parent = session.parentSessionId
+        ? reflectionSessions.find((candidate) => candidate.id === session.parentSessionId)
+        : undefined;
+      if (
+        parent &&
+        session.threadId === parent.threadId
+      ) {
+        const children = byParent.get(parent.id) || [];
         children.push(session);
-        byParent.set(session.parentSessionId, children);
+        byParent.set(parent.id, children);
       }
     }
     const ordered: SessionData[] = [];
