@@ -8,7 +8,7 @@
 export async function POST(request: Request) {
   try {
     // Parse text and voiceId from request body
-    const { text, voiceId = "pNInz6obpgDQGcFmaJgB" } = await request.json()
+    const { text, voiceId = "SAz9YHcvj6GT2YYXdXww" } = await request.json()
     
     if (typeof text !== "string" || !text.trim() || typeof voiceId !== "string" || !voiceId.trim()) {
       return Response.json({ error: "Text and a valid voiceId are required" }, { status: 400 })

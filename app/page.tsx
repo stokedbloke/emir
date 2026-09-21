@@ -2768,11 +2768,7 @@ export default function TalkToMyself() {
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="p-8">
-                    <div className="mb-5 flex items-center gap-3 rounded-xl border border-purple-100 bg-purple-50/70 px-4 py-3 text-sm text-purple-800">
-                      <span className="h-3 w-3 rounded-full bg-purple-500" aria-hidden="true" />
-                      <span><strong>One reflection thread</strong> — follow-ups are indented and labeled below the original reflection.</span>
-                    </div>
-                    <div className="space-y-6">
+  <div className="space-y-6">
                       {sessions.filter(s => s.transcript).map((session, index, visibleSessions) => (
                         <div
                           key={session.id}
