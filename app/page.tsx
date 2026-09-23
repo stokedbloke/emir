@@ -178,8 +178,10 @@ export default function TalkToMyself() {
 
   // Save reflection to Supabase
   const saveReflectionToSupabase = async (reflection: any) => {
+  let lastError: Error | null = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
   try {
-  console.log("Attempting to save reflection to Supabase:", reflection);
+  console.log(`Attempting to save reflection to Supabase (attempt ${attempt}/3):`, reflection.id);
   const res = await fetch(API_ENDPOINTS.REFLECTION, {
   signal: AbortSignal.timeout(UI_CONSTANTS.API_TIMEOUT_MS),
         method: 'POST',
@@ -191,12 +193,12 @@ export default function TalkToMyself() {
       console.log("Supabase save response:", responseData);
 
       if (!res.ok) {
-        console.error("Failed to save reflection:", res.status, res.statusText);
-        toast({
-          title: "Error",
-          description: "Failed to save reflection",
-          variant: "destructive",
-        });
+        lastError = new Error(responseData.error || `Reflection save failed (${res.status})`);
+        if (attempt < 3) {
+          await new Promise(resolve => setTimeout(resolve, attempt * 1500));
+          continue;
+        }
+        throw lastError;
       } else {
         console.log("Successfully saved reflection to Supabase");
         // Re-fetch history after successful save
@@ -208,13 +210,17 @@ export default function TalkToMyself() {
         }
       }
     } catch (err) {
-      console.error("Error saving reflection:", err);
+      lastError = err instanceof Error ? err : new Error("Failed to save reflection");
+      console.error("Error saving reflection after retries:", lastError);
       toast({
-        title: "Error",
-        description: "Failed to save reflection",
+        title: "Reflection saved locally, but not to your account",
+        description: "The app will keep this reflection available for retry. Please keep this page open and try again.",
         variant: "destructive",
       });
+      throw lastError;
     }
+  }
+  throw lastError || new Error("Failed to save reflection");
   };
 
   // 🗑️ DEAD CODE: This counts speech errors but the count isn't displayed - could be simplified to just show/hide the error message
@@ -1211,8 +1217,13 @@ export default function TalkToMyself() {
 
       return summary;
     } catch (error) {
-      console.error("Summary generation failed:", error);
-      throw error;
+      const reason = error instanceof Error ? error.message : "The summary service failed";
+      // A provider outage must never discard a successfully transcribed reflection.
+      // Preserve the user's words as a readable synthesis and allow the normal save/TTS path to continue.
+      const fallback = `I said, “${transcript.trim()}”`;
+      console.error("Summary generation failed; using transcript fallback:", reason);
+      setProcessingStage("Summary service unavailable — preserving your words...");
+      return fallback;
     }
   }
 
