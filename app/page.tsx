@@ -178,8 +178,10 @@ export default function TalkToMyself() {
 
   // Save reflection to Supabase
   const saveReflectionToSupabase = async (reflection: any) => {
+  let lastError: Error | null = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
   try {
-  console.log("Attempting to save reflection to Supabase:", reflection);
+  console.log(`Attempting to save reflection to Supabase (attempt ${attempt}/3):`, reflection.id);
   const res = await fetch(API_ENDPOINTS.REFLECTION, {
   signal: AbortSignal.timeout(UI_CONSTANTS.API_TIMEOUT_MS),
         method: 'POST',
@@ -191,12 +193,12 @@ export default function TalkToMyself() {
       console.log("Supabase save response:", responseData);
 
       if (!res.ok) {
-        console.error("Failed to save reflection:", res.status, res.statusText);
-        toast({
-          title: "Error",
-          description: "Failed to save reflection",
-          variant: "destructive",
-        });
+        lastError = new Error(responseData.error || `Reflection save failed (${res.status})`);
+        if (attempt < 3) {
+          await new Promise(resolve => setTimeout(resolve, attempt * 1500));
+          continue;
+        }
+        throw lastError;
       } else {
         console.log("Successfully saved reflection to Supabase");
         // Re-fetch history after successful save
@@ -208,13 +210,17 @@ export default function TalkToMyself() {
         }
       }
     } catch (err) {
-      console.error("Error saving reflection:", err);
+      lastError = err instanceof Error ? err : new Error("Failed to save reflection");
+      console.error("Error saving reflection after retries:", lastError);
       toast({
-        title: "Error",
-        description: "Failed to save reflection",
+        title: "Reflection saved locally, but not to your account",
+        description: "The app will keep this reflection available for retry. Please keep this page open and try again.",
         variant: "destructive",
       });
+      throw lastError;
     }
+  }
+  throw lastError || new Error("Failed to save reflection");
   };
 
   // 🗑️ DEAD CODE: This counts speech errors but the count isn't displayed - could be simplified to just show/hide the error message
@@ -238,6 +244,7 @@ export default function TalkToMyself() {
   const [processingStage, setProcessingStage] = useState("");
   const [progress, setProgress] = useState(0);
   const [processingError, setProcessingError] = useState<string | null>(null);
+  const [pendingReflection, setPendingReflection] = useState<any | null>(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isAudioReady, setIsAudioReady] = useState(false);
   const [breathingPhase, setBreathingPhase] = useState<"inhale" | "exhale">("inhale");
@@ -276,6 +283,17 @@ export default function TalkToMyself() {
     }
     setUserId(id);
   }, []);
+
+  // Recover a reflection whose server save failed after processing completed.
+  useEffect(() => {
+    if (!userId) return;
+    try {
+      const pending = localStorage.getItem(`em-pending-reflection-${userId}`);
+      if (pending) setPendingReflection(JSON.parse(pending));
+    } catch (error) {
+      console.error("Failed to load pending reflection:", error);
+    }
+  }, [userId]);
 
   // Load voice clone state from localStorage
   useEffect(() => {
@@ -1099,7 +1117,12 @@ export default function TalkToMyself() {
             };
             console.log("Sending reflection data to Supabase (background):", reflectionData);
             console.log("Recording duration from red bubble:", recordingDuration, "seconds");
+            const pendingKey = `em-pending-reflection-${userId}`;
+            localStorage.setItem(pendingKey, JSON.stringify(reflectionData));
+            setPendingReflection(reflectionData);
             await saveReflectionToSupabase(reflectionData);
+            localStorage.removeItem(pendingKey);
+            setPendingReflection(null);
             console.log("Reflection saved to Supabase successfully");
           } catch (err) {
             console.error("Failed to complete background processing:", err);
@@ -1211,8 +1234,13 @@ export default function TalkToMyself() {
 
       return summary;
     } catch (error) {
-      console.error("Summary generation failed:", error);
-      throw error;
+      const reason = error instanceof Error ? error.message : "The summary service failed";
+      // A provider outage must never discard a successfully transcribed reflection.
+      // Preserve the user's words as a readable synthesis and allow the normal save/TTS path to continue.
+      const fallback = `I said, “${transcript.trim()}”`;
+      console.error("Summary generation failed; using transcript fallback:", reason);
+      setProcessingStage("Summary service unavailable — preserving your words...");
+      return fallback;
     }
   }
 
@@ -2225,6 +2253,24 @@ export default function TalkToMyself() {
     <h3 className="font-semibold text-red-900">Your reflection was not processed</h3>
     <p className="mt-2 text-sm leading-relaxed text-red-800">{processingError}</p>
     <p className="mt-3 text-sm text-red-700">Your recording was not summarized or saved. Please try recording again. If this happens again, share this message when reporting the issue.</p>
+  {pendingReflection && userId && (
+    <button
+      type="button"
+      className="mt-4 rounded-lg bg-red-700 px-4 py-2 text-sm font-semibold text-white hover:bg-red-800"
+      onClick={async () => {
+        try {
+          setProcessingStage("Retrying save...");
+          await saveReflectionToSupabase(pendingReflection);
+          localStorage.removeItem(`em-pending-reflection-${userId}`);
+          setPendingReflection(null);
+          setProcessingError(null);
+          toast({ title: "Reflection recovered", description: "Your reflection is now saved to your account." });
+        } catch (error) {
+          setProcessingError(error instanceof Error ? error.message : "Recovery save failed. Your words are still retained for another retry.");
+        }
+      }}
+    >Retry saving this reflection</button>
+  )}
   </div>
   )}
 
