@@ -244,6 +244,7 @@ export default function TalkToMyself() {
   const [processingStage, setProcessingStage] = useState("");
   const [progress, setProgress] = useState(0);
   const [processingError, setProcessingError] = useState<string | null>(null);
+  const [pendingReflection, setPendingReflection] = useState<any | null>(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isAudioReady, setIsAudioReady] = useState(false);
   const [breathingPhase, setBreathingPhase] = useState<"inhale" | "exhale">("inhale");
@@ -282,6 +283,17 @@ export default function TalkToMyself() {
     }
     setUserId(id);
   }, []);
+
+  // Recover a reflection whose server save failed after processing completed.
+  useEffect(() => {
+    if (!userId) return;
+    try {
+      const pending = localStorage.getItem(`em-pending-reflection-${userId}`);
+      if (pending) setPendingReflection(JSON.parse(pending));
+    } catch (error) {
+      console.error("Failed to load pending reflection:", error);
+    }
+  }, [userId]);
 
   // Load voice clone state from localStorage
   useEffect(() => {
@@ -1105,7 +1117,12 @@ export default function TalkToMyself() {
             };
             console.log("Sending reflection data to Supabase (background):", reflectionData);
             console.log("Recording duration from red bubble:", recordingDuration, "seconds");
+            const pendingKey = `em-pending-reflection-${userId}`;
+            localStorage.setItem(pendingKey, JSON.stringify(reflectionData));
+            setPendingReflection(reflectionData);
             await saveReflectionToSupabase(reflectionData);
+            localStorage.removeItem(pendingKey);
+            setPendingReflection(null);
             console.log("Reflection saved to Supabase successfully");
           } catch (err) {
             console.error("Failed to complete background processing:", err);
@@ -2236,6 +2253,24 @@ export default function TalkToMyself() {
     <h3 className="font-semibold text-red-900">Your reflection was not processed</h3>
     <p className="mt-2 text-sm leading-relaxed text-red-800">{processingError}</p>
     <p className="mt-3 text-sm text-red-700">Your recording was not summarized or saved. Please try recording again. If this happens again, share this message when reporting the issue.</p>
+  {pendingReflection && userId && (
+    <button
+      type="button"
+      className="mt-4 rounded-lg bg-red-700 px-4 py-2 text-sm font-semibold text-white hover:bg-red-800"
+      onClick={async () => {
+        try {
+          setProcessingStage("Retrying save...");
+          await saveReflectionToSupabase(pendingReflection);
+          localStorage.removeItem(`em-pending-reflection-${userId}`);
+          setPendingReflection(null);
+          setProcessingError(null);
+          toast({ title: "Reflection recovered", description: "Your reflection is now saved to your account." });
+        } catch (error) {
+          setProcessingError(error instanceof Error ? error.message : "Recovery save failed. Your words are still retained for another retry.");
+        }
+      }}
+    >Retry saving this reflection</button>
+  )}
   </div>
   )}
 
