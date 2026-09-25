@@ -1005,7 +1005,7 @@ export default function TalkToMyself() {
       // Start TTS generation in parallel while we process the results
       // This reduces perceived wait time by starting audio generation early
       let ttsPromise: Promise<void> | null = null;
-  if (globalSettings?.tts_service === 'elevenlabs' && (selectedElevenLabsVoice || globalSettings?.elevenlabs_voice_id)) {
+  if (globalSettings?.tts_service === 'elevenlabs' && (selectedElevenLabsVoice || userVoiceCloneId || globalSettings?.elevenlabs_voice_id)) {
   // Start TTS generation immediately after we have the summary, using either
   // the selected generated voice or the configured voice.
   ttsPromise = speakSummary(trimmedSummary);
@@ -1664,9 +1664,9 @@ export default function TalkToMyself() {
       // Set error state for UI display instead of invasive toast
       if (errorMessage === 'API_LIMIT_REACHED') {
         setVoiceCloneError('Voice clone limit reached. Try again next month or use the default voice.');
-      } else {
-        setVoiceCloneError('Unable to create voice clone. You can still use the default voice.');
-      }
+  } else {
+  setVoiceCloneError(`Unable to create voice clone: ${errorMessage}. Your existing clone remains unchanged; you can still use it or the default voice.`);
+  }
     } finally {
       setIsCloningVoice(false);
     }
