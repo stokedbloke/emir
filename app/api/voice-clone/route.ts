@@ -87,6 +87,9 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     console.error('Voice clone error:', error);
-    return Response.json({ error: 'Failed to create voice clone' }, { status: 500 });
+    return Response.json({
+      error: 'Failed to create voice clone',
+      details: error instanceof Error ? error.message : 'Unknown ElevenLabs error',
+    }, { status: 500 });
   }
 }
