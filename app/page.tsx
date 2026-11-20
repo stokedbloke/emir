@@ -47,6 +47,8 @@ import { LoadingStates } from "@/components/LoadingStates";
 import { BackgroundElements } from "@/components/BackgroundElements";
 import { AppHeader } from "@/components/AppHeader";
 import { useSettings } from "@/hooks/useSettings";
+import { useAccount } from "@/hooks/useAccount";
+import { AccountPanel } from "@/components/AccountPanel";
 import { useServiceStatus } from "@/hooks/useServiceStatus";
 
 
@@ -96,7 +98,11 @@ export default function TalkToMyself() {
   const { toast } = useToast();
   const fullRecognitionTranscriptRef = useRef("");
   const [actualTTSService, setActualTTSService] = useState<string>("browser");
-  const [userId, setUserId] = useState<string>("");
+  // Identity: a silent anonymous session, with an optional email and password.
+  const { userId, email: accountEmail, accountsAvailable, authHeaders, signUp, signIn, signOut } = useAccount();
+  const [showSignIn, setShowSignIn] = useState(false);
+  const [showAccountForm, setShowAccountForm] = useState(false);
+  const [accountPromptDismissed, setAccountPromptDismissed] = useState(false);
 
   // Sessions state management - reverted from useSessions hook for simplicity
   const [sessions, setSessions] = useState<SessionData[]>([]);
@@ -113,7 +119,7 @@ export default function TalkToMyself() {
       console.log("Fetching reflections for user:", userId);
       const res = await fetch(API_ENDPOINTS.REFLECTION, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
         body: JSON.stringify({ userId }),
       });
 
@@ -188,7 +194,7 @@ export default function TalkToMyself() {
         const res = await fetch(API_ENDPOINTS.REFLECTION, {
           signal: AbortSignal.timeout(UI_CONSTANTS.API_TIMEOUT_MS),
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
           body: JSON.stringify(reflection),
         });
         if (res.ok) return;
@@ -327,16 +333,20 @@ export default function TalkToMyself() {
     }
   }, [globalSettings?.tts_service]);
 
+  // When the identity changes (signing in or out), start from that person's
+  // history rather than showing the previous one.
+  const previousUserIdRef = useRef("");
   useEffect(() => {
-    // Assign or retrieve a unique anonymous user ID for this browser/device.
-    // This ID is stored in localStorage and used to associate reflections with the user in Supabase.
-    let id = localStorage.getItem('em-user-id');
-    if (!id) {
-      id = uuidv4();
-      localStorage.setItem('em-user-id', id);
+    if (previousUserIdRef.current && previousUserIdRef.current !== userId) {
+      setSessions([]);
+      setCurrentSession(null);
+      setActiveTab("record");
     }
-    setUserId(id);
-  }, []);
+    previousUserIdRef.current = userId;
+    try {
+      setAccountPromptDismissed(localStorage.getItem("em-account-prompt-dismissed") === "1");
+    } catch {}
+  }, [userId]);
 
   // Recover reflections whose server save failed: show them in the history and
   // try saving again now, and whenever the connection comes back.
@@ -1725,7 +1735,7 @@ export default function TalkToMyself() {
         // Delete voice clone from ElevenLabs
         await fetch(API_ENDPOINTS.VOICE_CLONE_DELETE, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
           body: JSON.stringify({ voiceId: userVoiceCloneId, userId }),
         });
 
@@ -1820,6 +1830,7 @@ export default function TalkToMyself() {
 
         const response = await fetch(API_ENDPOINTS.VOICE_CLONE_IMPROVE, {
           method: 'POST',
+          headers: await authHeaders(),
           body: formData,
         });
 
@@ -1854,6 +1865,7 @@ export default function TalkToMyself() {
 
         const response = await fetch(API_ENDPOINTS.VOICE_CLONE, {
           method: 'POST',
+          headers: await authHeaders(),
           body: formData,
         });
 
@@ -1987,7 +1999,7 @@ export default function TalkToMyself() {
   const payload = { text: summary, voiceId: activeCustomVoiceId, userId };
         const response = await fetch(API_ENDPOINTS.VOICE_ELEVENLABS, {
           method: "POST",
-          headers: { "Content-Type": "application/json", ...adminHeaders() },
+          headers: { "Content-Type": "application/json", ...adminHeaders(), ...(await authHeaders()) },
           body: JSON.stringify(payload),
         });
 
@@ -2028,7 +2040,7 @@ export default function TalkToMyself() {
         const payload = { text: summary, voiceId: activeCustomVoiceId || globalSettings?.elevenlabs_voice_id || DEFAULT_VALUES.ELEVENLABS_VOICE_ID, userId };
         const response = await fetch(API_ENDPOINTS.VOICE_ELEVENLABS, {
           method: "POST",
-          headers: { "Content-Type": "application/json", ...adminHeaders() },
+          headers: { "Content-Type": "application/json", ...adminHeaders(), ...(await authHeaders()) },
           body: JSON.stringify(payload),
         });
         console.log('ElevenLabs API response status:', response.status);
@@ -2545,6 +2557,32 @@ export default function TalkToMyself() {
                   </div>
                 </CardContent>
               </Card>
+              {/* Returning users on a new device: a quiet way in. Never required. */}
+              {accountsAvailable && !accountEmail && !isRecording && !isProcessing && (
+                showSignIn ? (
+                  <div className="mx-auto max-w-2xl">
+                    <AccountPanel
+                      initialMode="signin"
+                      onSignUp={signUp}
+                      onSignIn={signIn}
+                      onDone={(mode) => {
+                        setShowSignIn(false);
+                        toast(mode === "signin"
+                          ? { title: "Signed in", description: "Your history has been loaded." }
+                          : { title: "Email and password saved", description: "You can now sign in on another device to see this history." });
+                      }}
+                      onDismiss={() => setShowSignIn(false)}
+                    />
+                  </div>
+                ) : (
+                  <p className="text-center text-sm text-gray-500">
+                    Been here before on another device?{" "}
+                    <button type="button" className="text-purple-700 underline decoration-dotted hover:text-purple-900" onClick={() => setShowSignIn(true)}>
+                      Sign in to see your history
+                    </button>
+                  </p>
+                )
+              )}
             </TabsContent>
 
             {/* Summary Tab */}
@@ -3129,6 +3167,58 @@ export default function TalkToMyself() {
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="p-8">
+                    {/* Optional account: offered only once there is a history worth keeping */}
+                    {accountsAvailable && (() => {
+                      const savedCount = journeySessions.filter((session) => !pendingReflections.some((item) => item.id === session.id)).length;
+                      if (accountEmail) {
+                        return (
+                          <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-3 text-sm text-emerald-900">
+                            <span>Signed in as <strong>{accountEmail}</strong>. Your history is available on any device you sign in on.</span>
+                            <button
+                              type="button"
+                              className="text-emerald-800 underline decoration-dotted hover:text-emerald-950"
+                              onClick={async () => {
+                                await signOut();
+                                toast({ title: "Signed out", description: "Your reflections stay in your account. This browser now starts fresh." });
+                              }}
+                            >
+                              Sign out
+                            </button>
+                          </div>
+                        );
+                      }
+                      if (savedCount < 3) return null;
+                      if (accountPromptDismissed && !showAccountForm) {
+                        return (
+                          <p className="mb-6 text-sm text-gray-500">
+                            Your history is kept in this browser only.{" "}
+                            <button type="button" className="text-purple-700 underline decoration-dotted hover:text-purple-900" onClick={() => setShowAccountForm(true)}>
+                              Add an email to keep it across devices (optional)
+                            </button>
+                          </p>
+                        );
+                      }
+                      return (
+                        <div className="mb-6">
+                          <AccountPanel
+                            initialMode="signup"
+                            onSignUp={signUp}
+                            onSignIn={signIn}
+                            onDone={(mode) => {
+                              setShowAccountForm(false);
+                              toast(mode === "signup"
+                                ? { title: "Email and password saved", description: "You can now sign in on another device to see this history." }
+                                : { title: "Signed in", description: "Your history has been loaded." });
+                            }}
+                            onDismiss={() => {
+                              setShowAccountForm(false);
+                              setAccountPromptDismissed(true);
+                              try { localStorage.setItem("em-account-prompt-dismissed", "1"); } catch {}
+                            }}
+                          />
+                        </div>
+                      );
+                    })()}
   <div className="space-y-6">
                       {journeySessions.map((session) => (
                         <div

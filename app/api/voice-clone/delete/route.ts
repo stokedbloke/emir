@@ -7,10 +7,15 @@
 // Returns: { success: boolean } on success, or { error: string } on failure.
 //
 import { ownsClone } from '@/lib/voice-ownership';
+import { resolveUserId } from '@/lib/account';
 
 export async function POST(request: Request) {
   try {
-    const { voiceId, userId } = await request.json();
+    const body = await request.json();
+    const voiceId = body.voiceId;
+    const resolved = await resolveUserId(request, body.userId);
+    if (!resolved.ok) return Response.json({ error: resolved.error }, { status: resolved.status });
+    const userId = resolved.userId;
 
     if (typeof voiceId !== 'string' || typeof userId !== 'string' || !voiceId || !userId) {
       return Response.json({ error: "voiceId and userId required" }, { status: 400 });

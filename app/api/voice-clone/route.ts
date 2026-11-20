@@ -9,12 +9,15 @@
 // Returns: { voiceId: string, success: boolean } on success, or { error: string } on failure.
 //
 import { cloneNameFor } from '@/lib/voice-ownership';
+import { resolveUserId } from '@/lib/account';
 
 export async function POST(request: Request) {
   try {
     const formData = await request.formData();
     const audioBlob = formData.get('audio') as Blob;
-    const userId = formData.get('userId') as string;
+    const resolved = await resolveUserId(request, formData.get('userId'));
+    if (!resolved.ok) return Response.json({ error: resolved.error }, { status: resolved.status });
+    const userId = resolved.userId;
 
     if (!audioBlob || !userId || typeof (audioBlob as Blob).arrayBuffer !== 'function' || audioBlob.size === 0) {
       return Response.json({ error: "A non-empty audio file and userId are required" }, { status: 400 });

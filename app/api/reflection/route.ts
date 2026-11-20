@@ -8,6 +8,7 @@
 // Returns: { success: true } on success, or { error: ... } on failure.
 //
 import { createClient } from '@supabase/supabase-js';
+import { resolveUserId } from '@/lib/account';
 
 function getSupabase() {
   const url = process.env.SUPABASE_URL;
@@ -23,7 +24,13 @@ export async function POST(request: Request) {
     const supabase = getSupabase();
     // Parse the incoming JSON body
     const body = await request.json();
-    const { id, userId, transcript, summary, emotions, vocal, recording_duration } = body;
+    const { id, transcript, summary, emotions, vocal, recording_duration } = body;
+
+    // The session decides whose history this is; the ID in the body is only
+    // trusted while no session owns it.
+    const resolved = await resolveUserId(request, body.userId);
+    if (!resolved.ok) return Response.json({ error: resolved.error }, { status: resolved.status });
+    const userId = resolved.userId;
 
     // If only userId is provided, fetch reflection history
     if (userId && !transcript && !summary && !emotions && !vocal) {
@@ -41,8 +48,8 @@ export async function POST(request: Request) {
       return Response.json({ reflections: data || [] });
     }
 
-    if (typeof userId !== 'string' || !userId || typeof transcript !== 'string' || !transcript.trim()) {
-      return Response.json({ error: 'userId and a transcript are required' }, { status: 400 });
+    if (typeof transcript !== 'string' || !transcript.trim()) {
+      return Response.json({ error: 'A transcript is required' }, { status: 400 });
     }
 
     // A reflection is saved once right after the summary and again when the

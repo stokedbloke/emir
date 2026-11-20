@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cloneNameFor, ownsClone } from '@/lib/voice-ownership';
+import { resolveUserId } from '@/lib/account';
 
 /**
  * API endpoint for improving/replacing existing voice clones
@@ -20,7 +21,9 @@ export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
     const audio = formData.get('audio') as File;
-    const userId = formData.get('userId') as string;
+    const resolved = await resolveUserId(request, formData.get('userId'));
+    if (!resolved.ok) return NextResponse.json({ error: resolved.error }, { status: resolved.status });
+    const userId = resolved.userId;
     const voiceId = formData.get('voiceId') as string;
 
     if (!audio || !userId || !voiceId || audio.size === 0) {
