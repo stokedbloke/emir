@@ -2823,6 +2823,33 @@ export default function TalkToMyself() {
                     </div>
                   </CardContent>
                 </Card>
+                {/* Earlier reflections in this thread, shown in full with nothing to click */}
+                {(() => {
+                  const threadId = currentSession.threadId || currentSession.id;
+                  const earlier = sessions
+                    .filter((session) => (session.threadId || session.id) === threadId
+                      && session.id !== currentSession.id
+                      && session.timestamp.getTime() < currentSession.timestamp.getTime())
+                    .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+                  if (earlier.length === 0) return null;
+                  return (
+                    <Card className="border-purple-100 bg-white/60 shadow-lg rounded-2xl">
+                      <CardHeader className="pb-3">
+                        <CardTitle className="text-base text-purple-800">Earlier in this thread</CardTitle>
+                      </CardHeader>
+                      <CardContent className="flex flex-col gap-4 pt-0">
+                        {earlier.map((session) => (
+                          <div key={session.id} className="border-l-2 border-purple-200 pl-4">
+                            <p className="text-xs font-medium text-gray-500">
+                              {session.timestamp.toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                            </p>
+                            <p className="mt-1 leading-relaxed text-gray-700">{session.summary}</p>
+                          </div>
+                        ))}
+                      </CardContent>
+                    </Card>
+                  );
+                })()}
                 {currentSession && (
                   <div className="flex items-center space-x-2 mt-2">
                     <Badge variant="secondary">
