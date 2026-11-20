@@ -1446,129 +1446,50 @@ export default function TalkToMyself() {
     }
   }
 
-  // [CHANGE: 2025-12-14] Restored client-side audio preprocessing.
-  // DESCRIPTION: Chrome MediaRecorder produces 'audio/webm' (Opus) by default.
-  // The Web Audio API's decodeAudioData() method CANNOT decode Opus in some contexts or if header is incomplete.
-  // However, we successfully use it here to decode the recording and re-encode as linear PCM WAV.
-  //
-  // REASON: Valence API requires 'audio/wav' (Pulse Code Modulation). Sending WebM directly causes 500 Error.
-  // We manually construct a WAV header and send raw PCM data.
-  //
-  // RISK: Client-side processing consumes CPU and adds slight latency before API call.
-  // DEBT: Manual WAV header construction (`audioBufferToWav`) is verbose. Could be replaced by a library.
-  //
-  // Preprocess audio for Valence API requirements (44.1kHz, stereo, 5-30s)
-  const preprocessAudioForValence = async (audioBlob: Blob): Promise<Blob> => {
+  // The voice-emotion service (Valence) takes WAV, mono, 4.5 to 15 seconds per
+  // file. The recording is decoded in the browser, mixed to mono at 44.1 kHz
+  // and cut into up to three clips spread across it (start, middle, end), so a
+  // long reflection is judged on more than its opening. Returns no clips when
+  // the recording cannot be decoded.
+  const VALENCE_SAMPLE_RATE = 44100;
+  // The service ignores the first half second, so its 4.5-second minimum needs 5.
+  const VALENCE_MIN_SECONDS = 5.2;
+  const VALENCE_CLIP_SECONDS = 14;
+
+  const clipsForValence = async (audioBlob: Blob): Promise<Blob[]> => {
     let audioContext: AudioContext | null = null;
     try {
-      console.log('Starting audio preprocessing for Valence...');
-      console.log('Input blob:', { size: audioBlob.size, type: audioBlob.type });
-
-      // [FIX 2025-12-15] Do NOT force sampleRate in constructor. iOS Safari fails if hardware is 48kHz.
-      // We will handle resampling later if needed.
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      audioContext = new AudioContextClass(); // Let browser pick native rate (e.g. 48000)
+      // The browser picks its own rate here: forcing one fails on iOS Safari.
+      audioContext = new AudioContextClass();
+      const decoded = await audioContext!.decodeAudioData(await audioBlob.arrayBuffer());
+      if (!decoded.length) return [];
 
-      const arrayBuffer = await audioBlob.arrayBuffer();
-      console.log('ArrayBuffer size:', arrayBuffer.byteLength);
+      // One channel at the target rate: this both mixes down and resamples.
+      const offline = new OfflineAudioContext(1, Math.ceil(decoded.duration * VALENCE_SAMPLE_RATE), VALENCE_SAMPLE_RATE);
+      const source = offline.createBufferSource();
+      source.buffer = decoded;
+      source.connect(offline.destination);
+      source.start();
+      const samples = (await offline.startRendering()).getChannelData(0);
 
-      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-      console.log('Decoded audio:', {
-        duration: audioBuffer.duration,
-        channels: audioBuffer.numberOfChannels,
-        sampleRate: audioBuffer.sampleRate,
-        length: audioBuffer.length
+      const minSamples = Math.ceil(VALENCE_MIN_SECONDS * VALENCE_SAMPLE_RATE);
+      const clipSamples = VALENCE_CLIP_SECONDS * VALENCE_SAMPLE_RATE;
+      if (samples.length <= clipSamples) {
+        // Short recordings are padded with silence up to the minimum length.
+        const clip = new Float32Array(Math.max(samples.length, minSamples));
+        clip.set(samples);
+        return [monoWav(clip, VALENCE_SAMPLE_RATE)];
+      }
+      const count = samples.length < clipSamples * 2 ? 2 : 3;
+      const lastStart = samples.length - clipSamples;
+      return Array.from({ length: count }, (_, index) => {
+        const start = Math.round((lastStart * index) / (count - 1));
+        return monoWav(samples.subarray(start, start + clipSamples), VALENCE_SAMPLE_RATE);
       });
-
-      // Validating and ensuring 44.1kHz output if simpler methods fail
-      let processingBuffer = audioBuffer;
-
-      // If native rate is NOT 44100, we might want to resample. 
-      // Valence documentation prefers 44.1kHz.
-      if (audioBuffer.sampleRate !== 44100) {
-        console.log(`Resampling from ${audioBuffer.sampleRate} to 44100...`);
-        const offlineCtx = new OfflineAudioContext(
-          audioBuffer.numberOfChannels,
-          audioBuffer.duration * 44100,
-          44100
-        );
-        const source = offlineCtx.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(offlineCtx.destination);
-        source.start();
-        processingBuffer = await offlineCtx.startRendering();
-      }
-
-      const TARGET_SR = 44100;
-      const minSamples = TARGET_SR * 5; // 5 seconds
-      const maxSamples = TARGET_SR * 30; // 30 seconds
-
-      // Truncate if too long (logic relative to 44100 now)
-      let finalBuffer = processingBuffer;
-      if (processingBuffer.length > maxSamples) {
-        console.log("Truncating audio to 30s...");
-        finalBuffer = audioContext.createBuffer(
-          processingBuffer.numberOfChannels,
-          maxSamples,
-          TARGET_SR
-        );
-        for (let channel = 0; channel < processingBuffer.numberOfChannels; channel++) {
-          const sourceData = processingBuffer.getChannelData(channel);
-          const targetData = finalBuffer.getChannelData(channel);
-          targetData.set(sourceData.subarray(0, maxSamples));
-        }
-      }
-
-      // Ensure stereo (2 channels)
-      if (finalBuffer.numberOfChannels === 1) {
-        console.log("Up-mixing to stereo...");
-        const stereoBuffer = audioContext.createBuffer(
-          2,
-          finalBuffer.length,
-          TARGET_SR
-        );
-        const monoData = finalBuffer.getChannelData(0);
-        stereoBuffer.copyToChannel(monoData, 0);
-        stereoBuffer.copyToChannel(monoData, 1);
-        finalBuffer = stereoBuffer;
-      } else {
-        // If we processed/truncated, we need to ensure we hold a valid buffer reference
-        // Note: If we already had 2 channels and didn't truncate, finalBuffer is processingBuffer.
-      }
-
-      // Final length check (minimum 5s)
-      // Since we might have replaced the buffer above, check finalBuffer again
-      if (finalBuffer.length < minSamples) {
-        console.log("Padding audio to minimum 5s...");
-        const paddedBuffer = audioContext.createBuffer(
-          2, // Force valid stereo for output
-          minSamples,
-          TARGET_SR
-        );
-
-        // Copy existing data (handled channel count mismatch if any remaining)
-        const channelsToCopy = Math.min(finalBuffer.numberOfChannels, 2);
-        for (let i = 0; i < channelsToCopy; i++) {
-          paddedBuffer.copyToChannel(finalBuffer.getChannelData(i), i);
-        }
-        // If source was mono but we need stereo padding:
-        if (finalBuffer.numberOfChannels === 1) {
-          paddedBuffer.copyToChannel(finalBuffer.getChannelData(0), 1);
-        }
-
-        finalBuffer = paddedBuffer;
-      }
-
-      console.log('Converting to WAV format...');
-      const wavBlob = audioBufferToWav(finalBuffer);
-      console.log('WAV blob created:', { size: wavBlob.size, type: wavBlob.type });
-
-      return wavBlob;
     } catch (error) {
-      console.error("Audio preprocessing error:", error);
-      console.error("Error details:", error instanceof Error ? error.message : String(error));
-      // Return original blob if preprocessing fails, but warn heavily
-      return audioBlob;
+      console.error("Could not prepare the recording for voice analysis:", error instanceof Error ? error.message : error);
+      return [];
     } finally {
       if (audioContext && audioContext.state !== 'closed') {
         await audioContext.close();
@@ -1576,59 +1497,48 @@ export default function TalkToMyself() {
     }
   };
 
-  // Convert AudioBuffer to WAV Blob
-  const audioBufferToWav = (buffer: AudioBuffer): Blob => {
-    const numberOfChannels = buffer.numberOfChannels;
-    const sampleRate = buffer.sampleRate;
-    const format = 1; // PCM
-    const bitDepth = 16;
-
-    const bytesPerSample = bitDepth / 8;
-    const blockAlign = numberOfChannels * bytesPerSample;
-
-    const data = new Float32Array(buffer.length * numberOfChannels);
-    for (let channel = 0; channel < numberOfChannels; channel++) {
-      const channelData = buffer.getChannelData(channel);
-      for (let i = 0; i < buffer.length; i++) {
-        data[i * numberOfChannels + channel] = channelData[i];
-      }
-    }
-
-    const dataLength = data.length * bytesPerSample;
-    const bufferLength = 44 + dataLength;
-    const arrayBuffer = new ArrayBuffer(bufferLength);
-    const view = new DataView(arrayBuffer);
-
-    // Write WAV header
-    const writeString = (offset: number, string: string) => {
-      for (let i = 0; i < string.length; i++) {
-        view.setUint8(offset + i, string.charCodeAt(i));
-      }
+  // 16-bit mono WAV from raw samples.
+  const monoWav = (samples: Float32Array, sampleRate: number): Blob => {
+    const view = new DataView(new ArrayBuffer(44 + samples.length * 2));
+    const writeString = (offset: number, text: string) => {
+      for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
     };
-
     writeString(0, 'RIFF');
-    view.setUint32(4, bufferLength - 8, true);
+    view.setUint32(4, 36 + samples.length * 2, true);
     writeString(8, 'WAVE');
     writeString(12, 'fmt ');
-    view.setUint32(16, 16, true); // fmt chunk size
-    view.setUint16(20, format, true);
-    view.setUint16(22, numberOfChannels, true);
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true); // PCM
+    view.setUint16(22, 1, true); // mono
     view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate * blockAlign, true);
-    view.setUint16(32, blockAlign, true);
-    view.setUint16(34, bitDepth, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
     writeString(36, 'data');
-    view.setUint32(40, dataLength, true);
-
-    // Write audio data
-    let offset = 44;
-    for (let i = 0; i < data.length; i++) {
-      const sample = Math.max(-1, Math.min(1, data[i]));
-      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
-      offset += 2;
+    view.setUint32(40, samples.length * 2, true);
+    for (let i = 0; i < samples.length; i++) {
+      const sample = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(44 + i * 2, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
     }
+    return new Blob([view.buffer], { type: 'audio/wav' });
+  };
 
-    return new Blob([arrayBuffer], { type: 'audio/wav' });
+  // Voice emotions for one clip: every category with its probability.
+  const valenceEmotionsFor = async (clip: Blob): Promise<Array<{ emotion: string; confidence: number }>> => {
+    const audioBase64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(clip);
+    });
+    const response = await fetch(`${API_ENDPOINTS.EMOTIONS_VALENCE}?limit=7`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ audioBlob: audioBase64 }),
+    });
+    if (!response.ok) throw new Error(`Voice analysis failed (${response.status})`);
+    const data = await response.json();
+    return Array.isArray(data.emotions) ? data.emotions : [];
   };
 
   const analyzeEmotions = async (text: string, audioBlob?: Blob): Promise<EmotionAnalysis[]> => {
@@ -1658,30 +1568,25 @@ export default function TalkToMyself() {
     // Call Valence audio emotions API (if audio provided)
     if (audioBlob) {
       try {
-        // Preprocess audio in browser to meet Valence requirements
-        // (44.1kHz, stereo, minimum 5 seconds)
-        const preprocessedBlob = await preprocessAudioForValence(audioBlob);
-
-        // Convert audio blob to base64
-        const audioBase64 = await new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as string);
-          reader.readAsDataURL(preprocessedBlob);
-        });
-
-        const valenceResponse = await fetch(API_ENDPOINTS.EMOTIONS_VALENCE, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ audioBlob: audioBase64 }),
-        });
-
-        if (valenceResponse.ok) {
-          const data = await valenceResponse.json();
-          console.log("Valence audio emotion analysis result:", data);
-          const audioEmotions = (data.emotions || []).map((e: any) => ({ ...e, sources: ['audio-valence'] }));
-          combinedEmotions.push(...audioEmotions);
+        const clips = await clipsForValence(audioBlob);
+        const results = (await Promise.allSettled(clips.map(valenceEmotionsFor)))
+          .filter((result): result is PromiseFulfilledResult<Array<{ emotion: string; confidence: number }>> =>
+            result.status === "fulfilled" && result.value.length > 0)
+          .map((result) => result.value);
+        if (results.length > 0) {
+          // Average each category over the clips that were analysed.
+          const totals = new Map<string, number>();
+          for (const emotions of results) {
+            for (const { emotion, confidence } of emotions) {
+              totals.set(emotion, (totals.get(emotion) || 0) + confidence / results.length);
+            }
+          }
+          const audioEmotions = Array.from(totals, ([emotion, confidence]) => ({ emotion, confidence, sources: ['audio-valence'] }))
+            .sort((x, y) => y.confidence - x.confidence)
+            .slice(0, 3);
+          combinedEmotions.push(...(audioEmotions as EmotionAnalysis[]));
         } else {
-          console.warn("Valence audio emotion analysis failed:", valenceResponse.status);
+          console.warn("Voice emotion analysis returned nothing for this recording");
         }
       } catch (error) {
         console.error("Valence audio emotion analysis error:", error);
