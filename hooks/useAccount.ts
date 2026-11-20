@@ -125,7 +125,12 @@ export function useAccount() {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) return { ok: false, error: data.error || 'Could not create the account' };
-      await supabaseBrowser()?.auth.refreshSession();
+      // Setting a password ends the anonymous session, so sign in with it now.
+      // It is the same user, so the history is unchanged.
+      const signedIn = await supabaseBrowser()?.auth.signInWithPassword({ email: data.email, password });
+      if (!signedIn || signedIn.error) {
+        return { ok: false, error: 'Your account was created. Sign in with your email and password to continue.' };
+      }
       setEmail(data.email);
       return { ok: true };
     } catch {

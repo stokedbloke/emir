@@ -5,6 +5,9 @@
 // another device. The email is stored in Supabase Auth only. It is not verified
 // by a confirmation message, so no outgoing email service is needed.
 //
+// Changing the password ends the session that made the request, so the browser
+// signs in with the new password straight afterwards (see hooks/useAccount.ts).
+//
 // Returns: { email } or { error }.
 import { adminClient, bearerToken, linkedUserId, userFromToken } from '@/lib/account';
 
@@ -37,15 +40,15 @@ export async function POST(request: Request) {
       email_confirm: true,
     });
     if (error) {
-      const taken = error.code === 'email_exists' || /already (been )?registered|already exists/i.test(error.message);
-      if (taken) {
-        return Response.json({ error: 'An account with this email already exists. Sign in instead.' }, { status: 409 });
-      }
       if (error.code === 'weak_password') {
         return Response.json({ error: 'Choose a stronger password' }, { status: 400 });
       }
-      console.error('Account sign-up error:', error.message);
-      return Response.json({ error: 'Could not create the account' }, { status: 500 });
+      // Supabase reports an email that is already in use only as a generic
+      // update failure, so that is the most likely cause here.
+      console.error('Account sign-up error:', error.code, error.message);
+      return Response.json({
+        error: 'Could not create the account. If you already have one with this email, sign in instead.',
+      }, { status: 409 });
     }
 
     return Response.json({ email });
