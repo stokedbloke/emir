@@ -104,7 +104,6 @@ export default function TalkToMyself() {
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [expandedThreadSessions, setExpandedThreadSessions] = useState<Record<string, boolean>>({});
   const followUpParentRef = useRef<{ threadId: string; parentSessionId: string } | null>(null);
-  const hasExplicitVoiceSelectionRef = useRef(false);
   const recordingThreadContextRef = useRef<{ threadId?: string; parentSessionId?: string } | null>(null);
 
   // Fetch reflections from API route for the current user
@@ -379,7 +378,6 @@ export default function TalkToMyself() {
       if (storedVoiceId) {
         setUserVoiceCloneId(storedVoiceId);
         setHasVoiceClone(true);
-        hasExplicitVoiceSelectionRef.current = true;
         setSelectedElevenLabsVoice(storedVoiceId);
         console.log('Voice clone loaded from localStorage and selected as default:', storedVoiceId);
       }
@@ -658,13 +656,6 @@ export default function TalkToMyself() {
   followUpParentRef.current = null;
   recordingThreadContextRef.current = null;
   setActiveThreadId(null);
-  if (userVoiceCloneId && hasVoiceClone) {
-    hasExplicitVoiceSelectionRef.current = true;
-    setSelectedElevenLabsVoice(userVoiceCloneId);
-  } else {
-    hasExplicitVoiceSelectionRef.current = false;
-    setSelectedElevenLabsVoice("");
-  }
   } else {
   const selectedParent = followUpParentRef.current;
   const parentExists = selectedParent?.parentSessionId
@@ -1700,18 +1691,34 @@ export default function TalkToMyself() {
     fetchVoices();
   }, [globalSettings?.elevenlabs_voice_id, isAdmin]);
 
-  // A configured voice clone is the default for every new reflection.
+  // Which voice reads the summary: the choice saved in this browser if there
+  // is one ("" means the default voice was chosen on purpose), otherwise the
+  // person's own clone. The choice now carries over to new reflections.
   useEffect(() => {
-  if (userVoiceCloneId && hasVoiceClone) {
-    hasExplicitVoiceSelectionRef.current = true;
-    setSelectedElevenLabsVoice(userVoiceCloneId);
-  } else {
-    hasExplicitVoiceSelectionRef.current = false;
-    setSelectedElevenLabsVoice("");
-  }
-  }, [currentSession?.id, userVoiceCloneId, hasVoiceClone]);
-  
-  
+    if (!userId) return;
+    const saved = localStorage.getItem(`em-elevenlabs-voice-${userId}`);
+    const ownClone = hasVoiceClone && userVoiceCloneId ? userVoiceCloneId : "";
+    setSelectedElevenLabsVoice(saved !== null ? saved : ownClone);
+  }, [userId, userVoiceCloneId, hasVoiceClone]);
+
+  // Audio already generated for a summary is kept for replay. Drop it when the
+  // voice changes, or Listen would replay the previous voice.
+  const discardGeneratedAudio = () => {
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current = null;
+    }
+    if (typeof window !== "undefined" && "speechSynthesis" in window) window.speechSynthesis.cancel();
+    setIsSpeaking(false);
+    setIsAudioReady(false);
+  };
+
+  const chooseVoice = (voiceId: string) => {
+    discardGeneratedAudio();
+    setSelectedElevenLabsVoice(voiceId);
+    if (userId) localStorage.setItem(`em-elevenlabs-voice-${userId}`, voiceId);
+  };
+
   const handleDeleteVoiceClone = async () => {
     try {
       if (userVoiceCloneId) {
@@ -1725,8 +1732,9 @@ export default function TalkToMyself() {
         // Clear local state
   setUserVoiceCloneId(null);
   setHasVoiceClone(false);
-  hasExplicitVoiceSelectionRef.current = false;
   setSelectedElevenLabsVoice("");
+  localStorage.removeItem(`em-elevenlabs-voice-${userId}`);
+  discardGeneratedAudio();
   setHasRequestedVoiceClone(false);
         setVoiceCloneError(null); // Clear any error messages
         localStorage.removeItem(`${DEFAULT_VALUES.USER_VOICE_CLONE_PREFIX}${userId}`);
@@ -1826,8 +1834,9 @@ export default function TalkToMyself() {
           // Update the voice clone ID only after ElevenLabs confirms the replacement.
           setUserVoiceCloneId(data.voiceId);
           setHasVoiceClone(true);
-          hasExplicitVoiceSelectionRef.current = true;
           setSelectedElevenLabsVoice(data.voiceId);
+          localStorage.setItem(`em-elevenlabs-voice-${userId}`, data.voiceId);
+          discardGeneratedAudio();
           localStorage.setItem(`${DEFAULT_VALUES.USER_VOICE_CLONE_PREFIX}${userId}`, data.voiceId);
 
           toast({
@@ -1861,8 +1870,9 @@ export default function TalkToMyself() {
 
   setUserVoiceCloneId(data.voiceId);
   setHasVoiceClone(true);
-  hasExplicitVoiceSelectionRef.current = true;
   setSelectedElevenLabsVoice(data.voiceId);
+          localStorage.setItem(`em-elevenlabs-voice-${userId}`, data.voiceId);
+          discardGeneratedAudio();
   localStorage.setItem(`${DEFAULT_VALUES.USER_VOICE_CLONE_PREFIX}${userId}`, data.voiceId);
 
   toast({
@@ -1965,10 +1975,12 @@ export default function TalkToMyself() {
       elevenlabs_voice_id: globalSettings?.elevenlabs_voice_id
     });
 
-  // A configured clone is always the default. An explicit selector choice may override it.
-  const activeCustomVoiceId = hasVoiceClone && userVoiceCloneId
-    ? (hasExplicitVoiceSelectionRef.current ? selectedElevenLabsVoice || userVoiceCloneId : userVoiceCloneId)
-    : (hasExplicitVoiceSelectionRef.current ? selectedElevenLabsVoice || null : null);
+  // The selected voice, as long as this person may use it: their own clone, or
+  // any voice for the admin. Anything else falls back to the default voice.
+  const ownCloneId = hasVoiceClone && userVoiceCloneId ? userVoiceCloneId : null;
+  const activeCustomVoiceId = selectedElevenLabsVoice && (isAdmin || selectedElevenLabsVoice === ownCloneId)
+    ? selectedElevenLabsVoice
+    : null;
   console.log('Voice selection:', { activeCustomVoiceId, hasVoiceClone, userVoiceCloneId, selectedElevenLabsVoice });
   if (activeCustomVoiceId) {
   try {
@@ -2676,12 +2688,7 @@ export default function TalkToMyself() {
   <select
   id="elevenlabs-voice-select"
   value={selectedElevenLabsVoice || ""}
-  onChange={(event) => {
-  const voiceId = event.target.value;
-  hasExplicitVoiceSelectionRef.current = Boolean(voiceId);
-  setSelectedElevenLabsVoice(voiceId);
-  if (userId) localStorage.setItem(`em-elevenlabs-voice-${userId}`, voiceId);
-  }}
+  onChange={(event) => chooseVoice(event.target.value)}
   className="w-full rounded-md border border-current/20 bg-white px-2 py-1.5 text-sm"
   aria-label="Choose an ElevenLabs custom voice"
   >
