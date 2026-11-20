@@ -51,6 +51,7 @@ import { useAccount } from "@/hooks/useAccount";
 import { AccountPanel } from "@/components/AccountPanel";
 import { JournalPrompt } from "@/components/JournalPrompt";
 import { PromptManager } from "@/components/PromptManager";
+import { TranscriptEditor } from "@/components/TranscriptEditor";
 import { useServiceStatus } from "@/hooks/useServiceStatus";
 
 
@@ -1389,9 +1390,9 @@ export default function TalkToMyself() {
     }
   }
 
-  const generateSummary = async (transcript: string): Promise<string> => {
-    try {
-      console.log("Generating summary for transcript:", transcript)
+  // Ask the summary service for a summary. Throws when it fails or returns
+  // something unusable, so each caller can decide what to fall back to.
+  const requestSummary = async (transcript: string): Promise<string> => {
       // Use API (keys are configured on backend)
       console.log('Generating summary with service:', globalSettings?.summary_service);
       const response = await fetch(API_ENDPOINTS.SUMMARIZE, {
@@ -1424,6 +1425,11 @@ export default function TalkToMyself() {
       }
 
       return summary;
+  }
+
+  const generateSummary = async (transcript: string): Promise<string> => {
+    try {
+      return await requestSummary(transcript);
     } catch (error) {
       const reason = error instanceof Error ? error.message : "The summary service failed";
       // A provider outage must never discard a successfully transcribed reflection.
@@ -1679,6 +1685,87 @@ export default function TalkToMyself() {
 
     return combinedEmotions;
   }
+
+  // Save corrected words for a reflection, rewrite its summary from them and
+  // re-read the emotions in the text. Throws (with a message for the editor)
+  // when the correction could not be saved, so nothing on screen changes.
+  const updateTranscript = async (session: SessionData, transcript: string) => {
+    if (!userId) throw new Error("Your changes could not be saved. Please reload and try again.");
+
+    let summary = session.summary;
+    let summaryRefreshed = true;
+    try {
+      summary = (await requestSummary(transcript)).trim();
+    } catch (error) {
+      summaryRefreshed = false;
+      console.error("Summary refresh failed:", error instanceof Error ? error.message : error);
+    }
+
+    // The speaking time has not changed, so pace scales with the word count.
+    const vocal: VocalCharacteristics = { ...(session.vocalCharacteristics || {}) };
+    const oldWords = calculateWordCount(session.transcript || "");
+    if (vocal.wordsPerMinute && oldWords > 0) {
+      const wpm = Math.round(vocal.wordsPerMinute * calculateWordCount(transcript) / oldWords);
+      if (wpm >= 20 && wpm <= 320) {
+        vocal.wordsPerMinute = wpm;
+        vocal.pace = paceLabel(wpm);
+      }
+    }
+
+    const queued = readPendingReflections(userId).find((item) => item.id === session.id);
+    const saveChanges = async (changes: Record<string, unknown>) => {
+      const stillQueued = readPendingReflections(userId).find((item) => item.id === session.id);
+      if (stillQueued) {
+        // Never reached the server: correct the copy waiting on this device.
+        await persistReflection({ ...stillQueued, ...changes });
+        return;
+      }
+      const res = await fetch(API_ENDPOINTS.REFLECTION, {
+        method: "PATCH",
+        signal: AbortSignal.timeout(UI_CONSTANTS.API_TIMEOUT_MS),
+        headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+        body: JSON.stringify({ id: session.id, userId, ...changes }),
+      });
+      if (!res.ok) throw new Error(`Reflection update failed (${res.status})`);
+    };
+
+    try {
+      await saveChanges({ transcript, summary, vocal });
+    } catch (error) {
+      console.error("Transcript update failed:", error instanceof Error ? error.message : error);
+      throw new Error("Your changes could not be saved. Check your connection and try again.");
+    }
+
+    const apply = (item: SessionData): SessionData =>
+      item.id === session.id ? { ...item, transcript, summary, vocalCharacteristics: vocal } : item;
+    setSessions((prev) => prev.map(apply));
+    setCurrentSession((prev) => (prev ? apply(prev) : prev));
+    // Listen must read the new summary, not replay audio of the old one.
+    if (summaryRefreshed) discardGeneratedAudio();
+
+    toast(summaryRefreshed
+      ? { title: "Words updated", description: queued ? "Your summary was rewritten. It will be saved when the connection returns." : "Your summary was rewritten from the corrected words." }
+      : { title: "Words saved, summary unchanged", description: "The summary could not be rewritten just now. Save another edit later to try again.", variant: "destructive" });
+
+    // Emotions found in the words are read again in the background; the ones
+    // measured from the recording itself are kept.
+    setAnalyzingEmotionsId(session.id);
+    (async () => {
+      try {
+        const fromText = await analyzeEmotions(transcript);
+        if (fromText.length === 0) return;
+        const fromAudio = (session.emotions || []).filter((emotion: any) => (emotion.sources || []).includes("audio-valence"));
+        const emotions = [...fromText, ...fromAudio];
+        setSessions((prev) => prev.map((item) => (item.id === session.id ? { ...item, emotions } : item)));
+        setCurrentSession((prev) => (prev && prev.id === session.id ? { ...prev, emotions } : prev));
+        await saveChanges({ emotions });
+      } catch (error) {
+        console.error("Emotion refresh failed:", error instanceof Error ? error.message : error);
+      } finally {
+        setAnalyzingEmotionsId((current) => (current === session.id ? null : current));
+      }
+    })();
+  };
 
   // console.log("TTS service selected:", settings.voiceService);
   // Fetch ElevenLabs voices (API key is configured on backend)
@@ -2812,6 +2899,14 @@ export default function TalkToMyself() {
                     </div>
                   </CardContent>
                 </Card>
+                {currentSession.transcript && (
+                  <TranscriptEditor
+                    key={currentSession.id}
+                    transcript={currentSession.transcript}
+                    disabled={isRecording || isProcessing}
+                    onSave={(text) => updateTranscript(currentSession, text)}
+                  />
+                )}
                 {currentSession && (() => {
                   const threadId = currentSession.threadId || currentSession.id;
                   const threadSessions = sessions
