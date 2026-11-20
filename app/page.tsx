@@ -51,7 +51,6 @@ import { useAccount } from "@/hooks/useAccount";
 import { AccountPanel } from "@/components/AccountPanel";
 import { JournalPrompt } from "@/components/JournalPrompt";
 import { PromptManager } from "@/components/PromptManager";
-import { TranscriptEditor } from "@/components/TranscriptEditor";
 import { useServiceStatus } from "@/hooks/useServiceStatus";
 
 
@@ -100,18 +99,18 @@ export default function TalkToMyself() {
   // 🗑️ DEAD CODE: Live transcript is captured but never displayed in the UI - can be removed
   const { toast } = useToast();
   const fullRecognitionTranscriptRef = useRef("");
+  // Words heard in the current phrase that the browser has not confirmed yet.
+  const pendingRecognitionRef = useRef("");
   const [actualTTSService, setActualTTSService] = useState<string>("browser");
   // Identity: a silent anonymous session, with an optional email and password.
   const { userId, email: accountEmail, accountsAvailable, authHeaders, signUp, signIn, signOut } = useAccount();
   const [showSignIn, setShowSignIn] = useState(false);
   const [showAccountForm, setShowAccountForm] = useState(false);
-  const [accountPromptDismissed, setAccountPromptDismissed] = useState(false);
 
   // Sessions state management - reverted from useSessions hook for simplicity
   const [sessions, setSessions] = useState<SessionData[]>([]);
   const [currentSession, setCurrentSession] = useState<SessionData | null>(null);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
-  const [expandedThreadSessions, setExpandedThreadSessions] = useState<Record<string, boolean>>({});
   const followUpParentRef = useRef<{ threadId: string; parentSessionId: string } | null>(null);
   const recordingThreadContextRef = useRef<{ threadId?: string; parentSessionId?: string } | null>(null);
 
@@ -347,7 +346,6 @@ export default function TalkToMyself() {
     }
     previousUserIdRef.current = userId;
     try {
-      setAccountPromptDismissed(localStorage.getItem("em-account-prompt-dismissed") === "1");
     } catch {}
   }, [userId]);
 
@@ -786,6 +784,7 @@ export default function TalkToMyself() {
 
       // When you start a new recording, reset the ref:
       fullRecognitionTranscriptRef.current = "";
+      pendingRecognitionRef.current = "";
 
       startSpeechRecognition()
     } catch (err) {
@@ -849,15 +848,19 @@ export default function TalkToMyself() {
       setSpeechRecognitionError(null);
       if (!isRecordingRef.current) return;
 
+      // Confirmed phrases are added once. Everything not confirmed yet is kept
+      // aside: the browser only confirms a phrase at a pause, so the words just
+      // before "I'm complete" are usually still unconfirmed when recording stops.
       let interimTranscript = "";
-      for (let i = event.resultIndex; i < event.results.length; i++) {
+      for (let i = 0; i < event.results.length; i++) {
         const transcript = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
-          fullRecognitionTranscriptRef.current += transcript + " ";
+          if (i >= event.resultIndex) fullRecognitionTranscriptRef.current += transcript + " ";
         } else {
           interimTranscript += transcript;
         }
       }
+      pendingRecognitionRef.current = interimTranscript;
 
       // For live display
       if (showLiveTranscript) {
@@ -908,6 +911,12 @@ export default function TalkToMyself() {
 
     recognitionRef.current.onend = () => {
       console.warn("Speech recognition ended");
+      // The browser restarts recognition now and then. Keep any words it had
+      // heard but not confirmed, or they vanish with the old session.
+      if (pendingRecognitionRef.current.trim()) {
+        fullRecognitionTranscriptRef.current += pendingRecognitionRef.current.trim() + " ";
+        pendingRecognitionRef.current = "";
+      }
       if (isRecordingRef.current && recognitionRef.current) {
         setTimeout(() => {
           try {
@@ -1346,7 +1355,8 @@ export default function TalkToMyself() {
   }
 
   const transcribeAudio = async (audioBlob: Blob): Promise<string> => {
-    const browserTranscript = fullRecognitionTranscriptRef.current.trim() ||
+    const browserTranscript = `${fullRecognitionTranscriptRef.current} ${pendingRecognitionRef.current}`
+      .replace(/\s+/g, " ").trim() ||
       ((window as any).lastRecognitionTranscript || "").trim();
 
     // Browser speech recognition is the primary transcription path. The recorded
@@ -1390,9 +1400,9 @@ export default function TalkToMyself() {
     }
   }
 
-  // Ask the summary service for a summary. Throws when it fails or returns
-  // something unusable, so each caller can decide what to fall back to.
-  const requestSummary = async (transcript: string): Promise<string> => {
+  const generateSummary = async (transcript: string): Promise<string> => {
+    try {
+      console.log("Generating summary for transcript:", transcript)
       // Use API (keys are configured on backend)
       console.log('Generating summary with service:', globalSettings?.summary_service);
       const response = await fetch(API_ENDPOINTS.SUMMARIZE, {
@@ -1425,11 +1435,6 @@ export default function TalkToMyself() {
       }
 
       return summary;
-  }
-
-  const generateSummary = async (transcript: string): Promise<string> => {
-    try {
-      return await requestSummary(transcript);
     } catch (error) {
       const reason = error instanceof Error ? error.message : "The summary service failed";
       // A provider outage must never discard a successfully transcribed reflection.
@@ -1685,87 +1690,6 @@ export default function TalkToMyself() {
 
     return combinedEmotions;
   }
-
-  // Save corrected words for a reflection, rewrite its summary from them and
-  // re-read the emotions in the text. Throws (with a message for the editor)
-  // when the correction could not be saved, so nothing on screen changes.
-  const updateTranscript = async (session: SessionData, transcript: string) => {
-    if (!userId) throw new Error("Your changes could not be saved. Please reload and try again.");
-
-    let summary = session.summary;
-    let summaryRefreshed = true;
-    try {
-      summary = (await requestSummary(transcript)).trim();
-    } catch (error) {
-      summaryRefreshed = false;
-      console.error("Summary refresh failed:", error instanceof Error ? error.message : error);
-    }
-
-    // The speaking time has not changed, so pace scales with the word count.
-    const vocal: VocalCharacteristics = { ...(session.vocalCharacteristics || {}) };
-    const oldWords = calculateWordCount(session.transcript || "");
-    if (vocal.wordsPerMinute && oldWords > 0) {
-      const wpm = Math.round(vocal.wordsPerMinute * calculateWordCount(transcript) / oldWords);
-      if (wpm >= 20 && wpm <= 320) {
-        vocal.wordsPerMinute = wpm;
-        vocal.pace = paceLabel(wpm);
-      }
-    }
-
-    const queued = readPendingReflections(userId).find((item) => item.id === session.id);
-    const saveChanges = async (changes: Record<string, unknown>) => {
-      const stillQueued = readPendingReflections(userId).find((item) => item.id === session.id);
-      if (stillQueued) {
-        // Never reached the server: correct the copy waiting on this device.
-        await persistReflection({ ...stillQueued, ...changes });
-        return;
-      }
-      const res = await fetch(API_ENDPOINTS.REFLECTION, {
-        method: "PATCH",
-        signal: AbortSignal.timeout(UI_CONSTANTS.API_TIMEOUT_MS),
-        headers: { "Content-Type": "application/json", ...(await authHeaders()) },
-        body: JSON.stringify({ id: session.id, userId, ...changes }),
-      });
-      if (!res.ok) throw new Error(`Reflection update failed (${res.status})`);
-    };
-
-    try {
-      await saveChanges({ transcript, summary, vocal });
-    } catch (error) {
-      console.error("Transcript update failed:", error instanceof Error ? error.message : error);
-      throw new Error("Your changes could not be saved. Check your connection and try again.");
-    }
-
-    const apply = (item: SessionData): SessionData =>
-      item.id === session.id ? { ...item, transcript, summary, vocalCharacteristics: vocal } : item;
-    setSessions((prev) => prev.map(apply));
-    setCurrentSession((prev) => (prev ? apply(prev) : prev));
-    // Listen must read the new summary, not replay audio of the old one.
-    if (summaryRefreshed) discardGeneratedAudio();
-
-    toast(summaryRefreshed
-      ? { title: "Words updated", description: queued ? "Your summary was rewritten. It will be saved when the connection returns." : "Your summary was rewritten from the corrected words." }
-      : { title: "Words saved, summary unchanged", description: "The summary could not be rewritten just now. Save another edit later to try again.", variant: "destructive" });
-
-    // Emotions found in the words are read again in the background; the ones
-    // measured from the recording itself are kept.
-    setAnalyzingEmotionsId(session.id);
-    (async () => {
-      try {
-        const fromText = await analyzeEmotions(transcript);
-        if (fromText.length === 0) return;
-        const fromAudio = (session.emotions || []).filter((emotion: any) => (emotion.sources || []).includes("audio-valence"));
-        const emotions = [...fromText, ...fromAudio];
-        setSessions((prev) => prev.map((item) => (item.id === session.id ? { ...item, emotions } : item)));
-        setCurrentSession((prev) => (prev && prev.id === session.id ? { ...prev, emotions } : prev));
-        await saveChanges({ emotions });
-      } catch (error) {
-        console.error("Emotion refresh failed:", error instanceof Error ? error.message : error);
-      } finally {
-        setAnalyzingEmotionsId((current) => (current === session.id ? null : current));
-      }
-    })();
-  };
 
   // console.log("TTS service selected:", settings.voiceService);
   // Fetch ElevenLabs voices (API key is configured on backend)
@@ -2899,50 +2823,6 @@ export default function TalkToMyself() {
                     </div>
                   </CardContent>
                 </Card>
-                {currentSession.transcript && (
-                  <TranscriptEditor
-                    key={currentSession.id}
-                    transcript={currentSession.transcript}
-                    disabled={isRecording || isProcessing}
-                    onSave={(text) => updateTranscript(currentSession, text)}
-                  />
-                )}
-                {currentSession && (() => {
-                  const threadId = currentSession.threadId || currentSession.id;
-                  const threadSessions = sessions
-                    .filter((session) => (session.threadId || session.id) === threadId && session.id !== currentSession.id)
-                    .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
-                  if (threadSessions.length === 0) return null;
-                  return (
-                    <Card className="border-purple-100 bg-white/60 shadow-lg">
-                      <CardHeader className="pb-3">
-                        <CardTitle className="text-base text-purple-800">Earlier in this reflection thread</CardTitle>
-                        <CardDescription>Expand a previous synthesis to revisit what was read before this follow-up.</CardDescription>
-                      </CardHeader>
-                      <CardContent className="flex flex-col gap-3 pt-0">
-                        {threadSessions.map((session) => {
-                          const expanded = expandedThreadSessions[session.id] ?? false;
-                          return (
-                            <div key={session.id} className="rounded-xl border border-purple-100 bg-purple-50/50">
-                              <button
-                                type="button"
-                                className="flex w-full items-center justify-between gap-4 p-4 text-left"
-                                aria-expanded={expanded}
-                                onClick={() => setExpandedThreadSessions((previous) => ({ ...previous, [session.id]: !expanded }))}
-                              >
-                                <span className="text-sm font-medium text-gray-700">
-                                  {session.timestamp.toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
-                                </span>
-                                <span className="text-sm font-medium text-purple-700">{expanded ? "Hide synthesis" : "Show synthesis"}</span>
-                              </button>
-                              {expanded && <p className="border-t border-purple-100 px-4 pb-4 pt-3 text-gray-700 leading-relaxed">{session.summary}</p>}
-                            </div>
-                          );
-                        })}
-                      </CardContent>
-                    </Card>
-                  );
-                })()}
                 {currentSession && (
                   <div className="flex items-center space-x-2 mt-2">
                     <Badge variant="secondary">
@@ -3267,58 +3147,6 @@ export default function TalkToMyself() {
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="p-8">
-                    {/* Optional account: offered only once there is a history worth keeping */}
-                    {accountsAvailable && (() => {
-                      const savedCount = journeySessions.filter((session) => !pendingReflections.some((item) => item.id === session.id)).length;
-                      if (accountEmail) {
-                        return (
-                          <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-3 text-sm text-emerald-900">
-                            <span>Signed in as <strong>{accountEmail}</strong>. Your history is available on any device you sign in on.</span>
-                            <button
-                              type="button"
-                              className="text-emerald-800 underline decoration-dotted hover:text-emerald-950"
-                              onClick={async () => {
-                                await signOut();
-                                toast({ title: "Signed out", description: "Your reflections stay in your account. This browser now starts fresh." });
-                              }}
-                            >
-                              Sign out
-                            </button>
-                          </div>
-                        );
-                      }
-                      if (savedCount < 3) return null;
-                      if (accountPromptDismissed && !showAccountForm) {
-                        return (
-                          <p className="mb-6 text-sm text-gray-500">
-                            Your history is kept in this browser only.{" "}
-                            <button type="button" className="text-purple-700 underline decoration-dotted hover:text-purple-900" onClick={() => setShowAccountForm(true)}>
-                              Add an email to keep it across devices (optional)
-                            </button>
-                          </p>
-                        );
-                      }
-                      return (
-                        <div className="mb-6">
-                          <AccountPanel
-                            initialMode="signup"
-                            onSignUp={signUp}
-                            onSignIn={signIn}
-                            onDone={(mode) => {
-                              setShowAccountForm(false);
-                              toast(mode === "signup"
-                                ? { title: "Email and password saved", description: "You can now sign in on another device to see this history." }
-                                : { title: "Signed in", description: "Your history has been loaded." });
-                            }}
-                            onDismiss={() => {
-                              setShowAccountForm(false);
-                              setAccountPromptDismissed(true);
-                              try { localStorage.setItem("em-account-prompt-dismissed", "1"); } catch {}
-                            }}
-                          />
-                        </div>
-                      );
-                    })()}
   <div className="space-y-6">
                       {journeySessions.map((session) => (
                         <div
@@ -3404,6 +3232,47 @@ export default function TalkToMyself() {
                         </div>
                       ))}
                     </div>
+                    {/* Optional account: a quiet line under the reflections, never a prompt */}
+                    {accountsAvailable && (
+                      <div className="mt-8 border-t border-gray-100 pt-4 text-xs text-gray-500">
+                        {accountEmail ? (
+                          <p>
+                            Signed in as {accountEmail}.{" "}
+                            <button
+                              type="button"
+                              className="underline decoration-dotted hover:text-gray-700"
+                              onClick={async () => {
+                                await signOut();
+                                toast({ title: "Signed out", description: "Your reflections stay in your account. This browser now starts fresh." });
+                              }}
+                            >
+                              Sign out
+                            </button>
+                          </p>
+                        ) : showAccountForm ? (
+                          <AccountPanel
+                            initialMode="signup"
+                            onSignUp={signUp}
+                            onSignIn={signIn}
+                            onDone={(mode) => {
+                              setShowAccountForm(false);
+                              toast(mode === "signup"
+                                ? { title: "Account created", description: "You can now sign in on another device to see these reflections." }
+                                : { title: "Signed in", description: "Your history has been loaded." });
+                            }}
+                            onDismiss={() => setShowAccountForm(false)}
+                          />
+                        ) : (
+                          <p>
+                            These reflections are kept in this browser.{" "}
+                            <button type="button" className="underline decoration-dotted hover:text-gray-700" onClick={() => setShowAccountForm(true)}>
+                              Create an account
+                            </button>{" "}
+                            if you want to keep them across devices.
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               </TabsContent>

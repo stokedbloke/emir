@@ -25,8 +25,12 @@ const LABELS = [
 
 const MAX_EMOTIONS = 5;
 const MIN_SCORE = 0.05;
-const ATTEMPTS = 3;
-const ATTEMPT_TIMEOUT_MS = 8000;
+const ATTEMPTS = 2;
+// Gemini usually answers in a few seconds but has slow spells of 15 seconds or
+// more. The page does not wait on this, so slow is better than nothing.
+const ATTEMPT_TIMEOUT_MS = 25000;
+
+export const maxDuration = 60;
 
 type Emotion = { emotion: string; confidence: number };
 
@@ -48,8 +52,6 @@ const topEmotions = (items: Array<{ label: string; score: number }>): Emotion[] 
 
 async function withGemini(text: string, apiKey: string): Promise<Emotion[]> {
   const google = createGoogleGenerativeAI({ apiKey });
-  // Gemini usually answers in about two seconds but occasionally hangs, so each
-  // attempt is cut short and tried again rather than waited out.
   let lastError: unknown;
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     try {
@@ -58,6 +60,8 @@ async function withGemini(text: string, apiKey: string): Promise<Emotion[]> {
     temperature: 0,
     abortSignal: AbortSignal.timeout(ATTEMPT_TIMEOUT_MS),
     maxRetries: 0,
+    // Rating a short text needs no reasoning step, and skipping it is faster.
+    providerOptions: { google: { thinkingConfig: { thinkingBudget: 0 } } },
     schema: z.object({
       emotions: z.array(z.object({
         label: z.enum(LABELS),
