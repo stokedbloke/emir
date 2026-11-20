@@ -1,12 +1,18 @@
 // Extracted type definitions from app/page.tsx
 // Generated during refactoring - do not edit manually
 
+// Measured delivery stats. Reflections saved before these were measured only
+// carry the old estimated labels (tone, pitch, volume), which are no longer shown.
 export interface VocalCharacteristics {
-  tone: string
-  pace: string
-  pitch: string
-  volume: string
-  confidence: number
+  pace?: string
+  wordsPerMinute?: number
+  // Share of the recording (0-1) spent in pauses of half a second or longer.
+  pauseRatio?: number
+  longestPauseSeconds?: number
+  tone?: string
+  pitch?: string
+  volume?: string
+  confidence?: number
 }
 
 export interface EmotionAnalysis {

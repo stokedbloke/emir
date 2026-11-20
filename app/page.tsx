@@ -211,6 +211,8 @@ export default function TalkToMyself() {
   // mirrored into state for display.
   const [pendingReflections, setPendingReflections] = useState<any[]>([]);
   const [savingIds, setSavingIds] = useState<string[]>([]);
+  // Reflection whose emotion analysis is still running.
+  const [analyzingEmotionsId, setAnalyzingEmotionsId] = useState<string | null>(null);
   const savingIdsRef = useRef(new Set<string>());
   const pendingStorageKey = (uid: string) => `em-pending-reflections-${uid}`;
 
@@ -955,61 +957,73 @@ export default function TalkToMyself() {
     }
   }
 
-  const analyzeVocalCharacteristics = async (audioBlob: Blob): Promise<VocalCharacteristics | null> => {
+  // Measures pauses in the recording. Loudness is judged relative to this
+  // recording's own level, so a quiet microphone does not read as silence.
+  const analyzePauses = async (audioBlob: Blob): Promise<{ durationSeconds: number; pauseRatio: number; longestPauseSeconds: number } | null> => {
     try {
-      const audioBuffer = await audioBlob.arrayBuffer();
       const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const decodedAudio = await audioContext.decodeAudioData(audioBuffer);
-      const channelData = decodedAudio.getChannelData(0);
-      // DSP calculations
-      let rms = 0;
-      let zeroCrossings = 0;
-      for (let i = 0; i < channelData.length; i++) {
-        rms += channelData[i] * channelData[i];
-      }
-      rms = Math.sqrt(rms / channelData.length);
-      for (let i = 1; i < channelData.length; i++) {
-        if ((channelData[i] >= 0) !== (channelData[i - 1] >= 0)) {
-          zeroCrossings++;
-        }
-      }
-      const zcr = zeroCrossings / channelData.length;
-      const silenceThreshold = 0.01;
-      let speechSegments = 0;
-      let totalSpeechTime = 0;
-      let inSpeech = false;
-      let currentSegmentLength = 0;
-      for (let i = 0; i < channelData.length; i += 1000) {
-        const segment = Math.abs(channelData[i]);
-        if (segment > silenceThreshold) {
-          if (!inSpeech) {
-            speechSegments++;
-            inSpeech = true;
-            currentSegmentLength = 0;
-          }
-          currentSegmentLength++;
-          totalSpeechTime++;
-        } else {
-          inSpeech = false;
-        }
-      }
-      const duration = decodedAudio.duration;
-      const speechRatio = totalSpeechTime / (channelData.length / 1000);
-      const avgSegmentLength = speechSegments > 0 ? totalSpeechTime / speechSegments : 0;
+      const decodedAudio = await audioContext.decodeAudioData(await audioBlob.arrayBuffer());
       await audioContext.close();
+      const channelData = decodedAudio.getChannelData(0);
+      const frameSeconds = 0.05;
+      const frameSize = Math.max(1, Math.round(decodedAudio.sampleRate * frameSeconds));
+      const levels: number[] = [];
+      for (let start = 0; start + frameSize <= channelData.length; start += frameSize) {
+        let sum = 0;
+        for (let i = start; i < start + frameSize; i++) sum += channelData[i] * channelData[i];
+        levels.push(Math.sqrt(sum / frameSize));
+      }
+      if (levels.length < 20) return null;
+      const sorted = [...levels].sort((x, y) => x - y);
+      const loud = sorted[Math.floor(sorted.length * 0.95)];
+      if (loud < 0.002) return null; // effectively silent recording
+      const threshold = loud * 0.12;
+      const first = levels.findIndex((level) => level >= threshold);
+      let last = levels.length - 1;
+      while (last > first && levels[last] < threshold) last--;
+      // Count only pauses inside the speech, of half a second or more;
+      // shorter gaps are ordinary breaks between words.
+      const minPauseFrames = Math.round(0.5 / frameSeconds);
+      let pauseFrames = 0;
+      let longest = 0;
+      let run = 0;
+      for (let i = first; i <= last + 1; i++) {
+        if (i <= last && levels[i] < threshold) {
+          run++;
+        } else {
+          if (run >= minPauseFrames) {
+            pauseFrames += run;
+            longest = Math.max(longest, run);
+          }
+          run = 0;
+        }
+      }
+      const spokenFrames = last - first + 1;
       return {
-        tone: zcr > 0.1 ? "Bright" : zcr > 0.05 ? "Balanced" : "Warm",
-        pace: avgSegmentLength > 50 ? "Deliberate" : avgSegmentLength > 25 ? "Moderate" : "Quick",
-        pitch: "Balanced", // Not directly measured, can be improved
-        volume: rms > 0.1 ? "Strong" : rms > 0.05 ? "Moderate" : "Gentle",
-        confidence: Math.min(0.95, 0.6 + rms * 2 + speechRatio * 0.3),
+        durationSeconds: spokenFrames * frameSeconds,
+        pauseRatio: pauseFrames / spokenFrames,
+        longestPauseSeconds: longest * frameSeconds,
       };
     } catch (error) {
-      console.error("Frontend DSP analysis failed:", error);
-      // Return null to indicate analysis failed - no fake data
+      console.error("Pause analysis failed:", error);
       return null;
     }
   };
+
+  // Pace is words in the transcript divided by time. Returns null when the
+  // result is not believable (very short recording or a broken transcript).
+  const wordsPerMinuteFor = (text: string, seconds: number): number | null => {
+    if (!text || !seconds || seconds < 5) return null;
+    const wpm = Math.round(calculateWordCount(text) / (seconds / 60));
+    return wpm >= 20 && wpm <= 320 ? wpm : null;
+  };
+
+  const paceLabel = (wpm: number) =>
+    wpm < 110 ? "Unhurried" : wpm < 150 ? "Conversational" : wpm < 180 ? "Brisk" : "Fast";
+
+  const sessionWordsPerMinute = (session: SessionData): number | null =>
+    session.vocalCharacteristics?.wordsPerMinute
+      ?? wordsPerMinuteFor(session.transcript, session.recordingDuration || 0);
 
   const processAudio = async () => {
     // setIsProcessing(true) is now set in stopRecording to prevent UI flash
@@ -1067,10 +1081,16 @@ export default function TalkToMyself() {
       // Process only essential analysis in parallel for immediate user experience
       // Move non-essential analysis (emotions, vocal characteristics) to background
       const startTime = Date.now();
-      const [vocalCharacteristics, summary] = await Promise.all([
-        analyzeVocalCharacteristics(audioBlob),
+      const [pauses, summary] = await Promise.all([
+        analyzePauses(audioBlob),
         generateSummary(transcript)
       ]);
+      // Prefer the measured span of speech; fall back to the recording timer.
+      const wordsPerMinute = wordsPerMinuteFor(transcript, pauses?.durationSeconds || currentRecordingTimeRef.current);
+      const vocalCharacteristics: VocalCharacteristics = {
+        ...(wordsPerMinute ? { wordsPerMinute, pace: paceLabel(wordsPerMinute) } : {}),
+        ...(pauses ? { pauseRatio: pauses.pauseRatio, longestPauseSeconds: pauses.longestPauseSeconds } : {}),
+      };
       const processingTime = Date.now() - startTime;
       console.log(`Essential processing completed in ${processingTime}ms`);
 
@@ -1120,13 +1140,7 @@ export default function TalkToMyself() {
         transcript,
         summary,
         emotions: [], // Will be populated when background analysis completes
-        vocalCharacteristics: vocalCharacteristics || {
-          tone: "Unknown",
-          pace: "Unknown",
-          pitch: "Unknown",
-          volume: "Unknown",
-          confidence: 0
-        },
+        vocalCharacteristics,
         audioBlob,
         // Store the actual duration from the red bubble timer
         recordingDuration: recordingDuration,
@@ -1139,6 +1153,7 @@ export default function TalkToMyself() {
 
       setSessions((prev) => [newSession, ...prev])
       setCurrentSession(newSession)
+      setAnalyzingEmotionsId(newSession.id)
 
       // Switch to summary tab after a brief delay to ensure UI is ready
       setTimeout(() => {
@@ -1192,6 +1207,7 @@ export default function TalkToMyself() {
             }
 
             const emotions = await emotionPromise;
+            setAnalyzingEmotionsId((current) => current === newSession.id ? null : current);
             if (emotions && emotions.length > 0) {
               setCurrentSession(prev => prev && prev.id === newSession.id ? { ...prev, emotions } : prev);
               setSessions(prev => prev.map(session =>
@@ -2718,7 +2734,7 @@ export default function TalkToMyself() {
             {currentSession && (
               <TabsContent value="analysis" className="space-y-8">
                 <div className="grid gap-8">
-                  {/* 1. Text-Based Emotion Analysis (HuggingFace) */}
+                  {/* 1. Text-Based Emotion Analysis */}
                   <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
                     <CardHeader className="bg-gradient-to-r from-blue-50 to-indigo-50 p-8">
                       <CardTitle className="text-2xl text-gray-800 flex items-center space-x-3">
@@ -2729,7 +2745,7 @@ export default function TalkToMyself() {
                       </CardTitle>
                       <CardDescription className="text-gray-600 text-lg">
                         {/* [CHANGE: 2025-12-14] Updated label for clarity on overlapping emotions */}
-                        Top 5 detected emotions from your words (confidence scores - emotions can overlap)
+                        The emotions your words express most strongly, up to five. Each is scored on its own, so they can overlap.
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="p-8">
@@ -2762,7 +2778,11 @@ export default function TalkToMyself() {
 
                         ) : (
                           <div className="flex items-center justify-center py-4 bg-gray-50/50 rounded-xl border border-dashed border-gray-200">
-                            <p className="text-gray-400 text-sm">Text emotion analysis unavailable</p>
+                            <p className="text-gray-500 text-sm">
+                              {analyzingEmotionsId === currentSession.id
+                                ? "Analysing your words…"
+                                : "The emotion analysis did not complete for this reflection. Your reflection itself is not affected."}
+                            </p>
                           </div>
                         )
                       })()}
@@ -2812,7 +2832,11 @@ export default function TalkToMyself() {
 
                         ) : (
                           <div className="flex items-center justify-center py-4 bg-gray-50/50 rounded-xl border border-dashed border-gray-200">
-                            <p className="text-gray-400 text-sm">Audio analysis unavailable</p>
+                            <p className="text-gray-500 text-sm">
+                              {analyzingEmotionsId === currentSession.id
+                                ? "Analysing your voice…"
+                                : "The voice analysis did not complete for this reflection."}
+                            </p>
                           </div>
                         )
                       })()}
@@ -2826,80 +2850,78 @@ export default function TalkToMyself() {
                         <div className="w-8 h-8 bg-gradient-to-br from-indigo-400 to-purple-500 rounded-lg flex items-center justify-center">
                           <Waves className="w-4 h-4 text-white" />
                         </div>
-                        <span>Voice Patterns (DSP)</span>
+                        <span>Pace and Pauses</span>
                       </CardTitle>
                       <CardDescription className="text-gray-600 text-lg">
-                        Audio analysis of your vocal characteristics and delivery
+                        Measured from this recording and its transcript
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="p-8">
-                      {currentSession.vocalCharacteristics.tone === "Unknown" ? (
-                        <div className="text-center py-12">
-                          <div className="text-gray-400 text-lg mb-2">Vocal Analysis Unavailable</div>
-                          <div className="text-gray-500 text-sm">
-                            Audio analysis failed. This could be due to audio quality issues or browser limitations.
+                      {(() => {
+                        const wpm = sessionWordsPerMinute(currentSession);
+                        const vocal = currentSession.vocalCharacteristics || {};
+                        const others = sessions
+                          .filter((session) => session.id !== currentSession.id)
+                          .map(sessionWordsPerMinute)
+                          .filter((value): value is number => value !== null);
+                        const usual = others.length >= 3
+                          ? Math.round(others.reduce((sum, value) => sum + value, 0) / others.length)
+                          : null;
+                        const comparison = wpm && usual
+                          ? Math.abs(wpm - usual) / usual <= 0.1
+                            ? `About your usual pace (${usual} words per minute across ${others.length} other reflections).`
+                            : `${wpm > usual ? "Faster" : "Slower"} than your usual ${usual} words per minute across ${others.length} other reflections.`
+                          : null;
+                        const hasPauses = typeof vocal.pauseRatio === "number";
+                        if (!wpm && !hasPauses) {
+                          return (
+                            <div className="flex items-center justify-center py-4 bg-gray-50/50 rounded-xl border border-dashed border-gray-200">
+                              <p className="text-gray-500 text-sm">This recording was too short to measure pace.</p>
+                            </div>
+                          );
+                        }
+                        return (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            {wpm && (
+                              <div className="p-6 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-2xl border border-indigo-100">
+                                <div className="flex items-center justify-between">
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <span className="text-gray-700 font-medium underline decoration-dotted cursor-help">Pace</span>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      Words in your transcript divided by the time you spent speaking. If the transcript missed words, this reads lower than your real pace.
+                                    </TooltipContent>
+                                  </Tooltip>
+                                  <Badge className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white">{paceLabel(wpm)}</Badge>
+                                </div>
+                                <div className="mt-3 text-3xl font-semibold text-gray-800">
+                                  {wpm} <span className="text-base font-normal text-gray-600">words per minute</span>
+                                </div>
+                                {comparison && <p className="mt-2 text-sm text-gray-600">{comparison}</p>}
+                              </div>
+                            )}
+                            {hasPauses && (
+                              <div className="p-6 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-2xl border border-indigo-100">
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <span className="text-gray-700 font-medium underline decoration-dotted cursor-help">Pauses</span>
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    Quiet stretches of half a second or longer between your first and last words. Background noise can hide pauses.
+                                  </TooltipContent>
+                                </Tooltip>
+                                <div className="mt-3 text-3xl font-semibold text-gray-800">
+                                  {Math.round((vocal.pauseRatio || 0) * 100)}% <span className="text-base font-normal text-gray-600">of the time in pauses</span>
+                                </div>
+                                {(vocal.longestPauseSeconds || 0) > 0 && (
+                                  <p className="mt-2 text-sm text-gray-600">Longest pause: {(vocal.longestPauseSeconds || 0).toFixed(1)} seconds.</p>
+                                )}
+                              </div>
+                            )}
                           </div>
-                        </div>
-                      ) : (
-                        <div className="grid grid-cols-2 gap-8">
-                          <div className="space-y-6">
-                            <div className="flex justify-between items-center p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-100">
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <span className="text-gray-700 font-medium underline decoration-dotted cursor-help">Tone</span>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  Tone is estimated using the zero crossing rate (ZCR) of your audio. Higher ZCR means a brighter tone, lower means a warmer tone.
-                                </TooltipContent>
-                              </Tooltip>
-                              <Badge className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
-                                {currentSession.vocalCharacteristics.tone}
-                              </Badge>
-                            </div>
-                            <div className="flex justify-between items-center p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-100">
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <span className="text-gray-700 font-medium underline decoration-dotted cursor-help">Pace</span>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  Pace is estimated by analyzing the average length of speech segments above a silence threshold. Longer segments mean a more deliberate pace.
-                                </TooltipContent>
-                              </Tooltip>
-                              <Badge className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
-                                {currentSession.vocalCharacteristics.pace}
-                              </Badge>
-                            </div>
-                          </div>
-                          <div className="space-y-6">
-                            <div className="flex justify-between items-center p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-100">
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <span className="text-gray-700 font-medium underline decoration-dotted cursor-help">Pitch</span>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  Pitch is not directly measured, but inferred from the balance of the audio waveform and articulation. This is a rough estimate.
-                                </TooltipContent>
-                              </Tooltip>
-                              <Badge className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
-                                {currentSession.vocalCharacteristics.pitch}
-                              </Badge>
-                            </div>
-                            <div className="flex justify-between items-center p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-100">
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <span className="text-gray-700 font-medium underline decoration-dotted cursor-help">Volume</span>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  Volume is estimated using the root mean square (RMS) energy of your audio. Higher RMS means a stronger volume.
-                                </TooltipContent>
-                              </Tooltip>
-                              <Badge className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white">
-                                {currentSession.vocalCharacteristics.volume}
-                              </Badge>
-                            </div>
-                          </div>
-                        </div>
-                      )}
+                        );
+                      })()}
                     </CardContent>
                   </Card>
                 </div>
