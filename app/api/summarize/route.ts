@@ -97,10 +97,6 @@ Rephrased reflection (FIRST PERSON ONLY):`
 
     let summary = text?.trim();
 
-    // Debug logging to see what Gemini is actually returning
-    console.log("Gemini raw response:", text);
-    console.log("Gemini trimmed response:", summary);
-
     if (
       !summary ||
       summary.toLowerCase().includes("please provide the personal share") ||

@@ -100,7 +100,7 @@ Below are all environment variables required for this project, with their purpos
 | HUGGINGFACE_API_KEY            | Private       | HuggingFace API key for emotion analysis (server-side)       |
 | ELEVENLABS_API_KEY             | Private       | ElevenLabs API key for TTS (server-side)                     |
 | HUME_API_KEY                   | Private       | Hume.ai API key for TTS (server-side, optional)              |
-| NEXT_PUBLIC_ADMIN_SECRET       | Public        | Optional: Admin secret for browser admin features            |
+| ADMIN_SECRET                   | Private       | Optional: Admin secret, verified server-side. Open the app with `?admin=<secret>` to unlock admin tools |
 
 **Public variables** (those prefixed with `NEXT_PUBLIC_`) are exposed to the browser and must not contain sensitive information. All other variables are private and only available to server-side code (API routes, server functions).
 

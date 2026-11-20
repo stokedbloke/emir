@@ -6,7 +6,6 @@ declare var process: {
   env: {
     NEXT_PUBLIC_SUPABASE_URL: string; // Public: Supabase project URL for browser
     NEXT_PUBLIC_SUPABASE_ANON_KEY: string; // Public: Supabase anon key for browser
-    NEXT_PUBLIC_ADMIN_SECRET?: string; // Public: Optional admin secret for browser admin features
     NODE_ENV?: string; // Node environment (development, production, test)
   };
 };
@@ -70,6 +69,11 @@ export default function TalkToMyself() {
   const [hasPermission, setHasPermission] = useState<boolean | null>(false)
   const [isRecording, setIsRecording] = useState(false)
   const [isAdmin, setIsAdmin] = useState(false)
+  // Sent with voice requests so the server lets the admin list and play every voice.
+  const adminHeaders = (): Record<string, string> => {
+    const secret = isAdmin ? sessionStorage.getItem(DEFAULT_VALUES.ADMIN_SECRET_KEY) : null
+    return secret ? { "x-admin-secret": secret } : {}
+  }
   // Removed old local settings - now using global settings only
   // 🗑️ DEAD CODE: This breathing animation is purely cosmetic - can be removed if you want to simplify the UI
   // 🗑️ DEAD CODE: This entire API credit system is unused - can be removed
@@ -176,51 +180,101 @@ export default function TalkToMyself() {
     }
   };
 
-  // Save reflection to Supabase
+  // Save reflection to Supabase. Resolves once the server confirms the save;
+  // throws after three failed attempts (or at once when the server rejects it).
   const saveReflectionToSupabase = async (reflection: any) => {
-  let lastError: Error | null = null;
-  for (let attempt = 1; attempt <= 3; attempt++) {
-  try {
-  console.log(`Attempting to save reflection to Supabase (attempt ${attempt}/3):`, reflection.id);
-  const res = await fetch(API_ENDPOINTS.REFLECTION, {
-  signal: AbortSignal.timeout(UI_CONSTANTS.API_TIMEOUT_MS),
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(reflection),
-      });
-
-      const responseData = await res.json();
-      console.log("Supabase save response:", responseData);
-
-      if (!res.ok) {
+    let lastError: Error = new Error("Failed to save reflection");
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const res = await fetch(API_ENDPOINTS.REFLECTION, {
+          signal: AbortSignal.timeout(UI_CONSTANTS.API_TIMEOUT_MS),
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(reflection),
+        });
+        if (res.ok) return;
+        const responseData = await res.json().catch(() => ({}));
         lastError = new Error(responseData.error || `Reflection save failed (${res.status})`);
-        if (attempt < 3) {
-          await new Promise(resolve => setTimeout(resolve, attempt * 1500));
-          continue;
-        }
-        throw lastError;
-      } else {
-        console.log("Successfully saved reflection to Supabase");
-        // Re-fetch history after successful save
-        if (userId) {
-          console.log("Re-fetching reflections for user:", userId);
-          const updatedSessions = await fetchReflections(userId);
-          console.log("Updated sessions:", updatedSessions);
-          setSessions(updatedSessions);
-        }
+        // The server refused this reflection; sending it again will not help.
+        if (res.status >= 400 && res.status < 500) break;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error("Failed to save reflection");
       }
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error("Failed to save reflection");
-      console.error("Error saving reflection after retries:", lastError);
-      toast({
-        title: "Reflection saved locally, but not to your account",
-        description: "The app will keep this reflection available for retry. Please keep this page open and try again.",
-        variant: "destructive",
-      });
-      throw lastError;
+      if (attempt < 3) await new Promise(resolve => setTimeout(resolve, attempt * 1500));
     }
-  }
-  throw lastError || new Error("Failed to save reflection");
+    console.error("Error saving reflection after retries:", lastError);
+    throw lastError;
+  };
+
+  // Reflections the server has not confirmed yet. They are kept in this
+  // browser's storage (the source of truth, so reloads don't lose them) and
+  // mirrored into state for display.
+  const [pendingReflections, setPendingReflections] = useState<any[]>([]);
+  const [savingIds, setSavingIds] = useState<string[]>([]);
+  const savingIdsRef = useRef(new Set<string>());
+  const pendingStorageKey = (uid: string) => `em-pending-reflections-${uid}`;
+
+  const readPendingReflections = (uid: string): any[] => {
+    try {
+      const list = JSON.parse(localStorage.getItem(pendingStorageKey(uid)) || "[]");
+      return Array.isArray(list) ? list.filter((item) => item && item.id) : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const updatePendingReflections = (uid: string, change: (list: any[]) => any[]) => {
+    const next = change(readPendingReflections(uid));
+    try {
+      if (next.length > 0) localStorage.setItem(pendingStorageKey(uid), JSON.stringify(next));
+      else localStorage.removeItem(pendingStorageKey(uid));
+    } catch (error) {
+      console.error("Could not store the unsaved reflection on this device:", error);
+    }
+    setPendingReflections(next);
+  };
+
+  const pendingToSession = (reflection: any): SessionData => ({
+    id: String(reflection.id),
+    timestamp: new Date(reflection.created_at || Date.now()),
+    transcript: reflection.transcript,
+    summary: reflection.summary,
+    emotions: reflection.emotions || [],
+    vocalCharacteristics: reflection.vocal || {},
+    recordingDuration: reflection.recording_duration || 0,
+    threadId: reflection.device_info?.thread_id ? String(reflection.device_info.thread_id) : String(reflection.id),
+    parentSessionId: reflection.device_info?.parent_session_id,
+  });
+
+  // Queue the reflection on this device, then save it. It leaves the queue only
+  // when the server confirms, so a failed save can always be retried.
+  const persistReflection = async (reflection: any): Promise<boolean> => {
+    const uid = reflection.userId;
+    updatePendingReflections(uid, (list) => [...list.filter((item) => item.id !== reflection.id), reflection]);
+    savingIdsRef.current.add(reflection.id);
+    setSavingIds(Array.from(savingIdsRef.current));
+    try {
+      await saveReflectionToSupabase(reflection);
+      updatePendingReflections(uid, (list) => list.filter((item) => item.id !== reflection.id));
+      return true;
+    } catch {
+      return false;
+    } finally {
+      savingIdsRef.current.delete(reflection.id);
+      setSavingIds(Array.from(savingIdsRef.current));
+    }
+  };
+
+  // Try every queued reflection again, oldest first so a follow-up is sent
+  // after the reflection it follows. Returns how many are still unsaved.
+  const retryPendingReflections = async (uid: string): Promise<number> => {
+    const queued = readPendingReflections(uid)
+      .filter((item) => !savingIdsRef.current.has(item.id))
+      .sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
+    for (const reflection of queued) {
+      await persistReflection(reflection);
+    }
+    return readPendingReflections(uid).length;
   };
 
   // 🗑️ DEAD CODE: This counts speech errors but the count isn't displayed - could be simplified to just show/hide the error message
@@ -244,7 +298,6 @@ export default function TalkToMyself() {
   const [processingStage, setProcessingStage] = useState("");
   const [progress, setProgress] = useState(0);
   const [processingError, setProcessingError] = useState<string | null>(null);
-  const [pendingReflection, setPendingReflection] = useState<any | null>(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isAudioReady, setIsAudioReady] = useState(false);
   const [breathingPhase, setBreathingPhase] = useState<"inhale" | "exhale">("inhale");
@@ -284,15 +337,36 @@ export default function TalkToMyself() {
     setUserId(id);
   }, []);
 
-  // Recover a reflection whose server save failed after processing completed.
+  // Recover reflections whose server save failed: show them in the history and
+  // try saving again now, and whenever the connection comes back.
   useEffect(() => {
     if (!userId) return;
     try {
-      const pending = localStorage.getItem(`em-pending-reflection-${userId}`);
-      if (pending) setPendingReflection(JSON.parse(pending));
+      // Earlier versions kept a single unsaved reflection under this key.
+      const legacyKey = `em-pending-reflection-${userId}`;
+      const legacy = localStorage.getItem(legacyKey);
+      if (legacy) {
+        const reflection = JSON.parse(legacy);
+        if (reflection?.id) {
+          updatePendingReflections(userId, (list) => list.some((item) => item.id === reflection.id) ? list : [...list, reflection]);
+        }
+        localStorage.removeItem(legacyKey);
+      }
     } catch (error) {
       console.error("Failed to load pending reflection:", error);
     }
+    const queued = readPendingReflections(userId);
+    setPendingReflections(queued);
+    if (queued.length > 0) {
+      setSessions((prev) => {
+        const known = new Set(prev.map((session) => session.id));
+        return [...queued.filter((item) => !known.has(String(item.id))).map(pendingToSession), ...prev];
+      });
+      retryPendingReflections(userId);
+    }
+    const onOnline = () => { retryPendingReflections(userId); };
+    window.addEventListener("online", onOnline);
+    return () => window.removeEventListener("online", onOnline);
   }, [userId]);
 
   // Load voice clone state from localStorage
@@ -323,23 +397,31 @@ export default function TalkToMyself() {
   useEffect(() => {
     if (userId) {
       console.log("Initial fetch of reflections for user:", userId);
-      fetchReflections(userId).then(setSessions);
+      // Keep reflections that exist only on this device (not saved yet).
+      fetchReflections(userId).then((rows: SessionData[]) => setSessions((prev) => {
+        const saved = new Set(rows.map((row) => row.id));
+        return [...prev.filter((session) => !saved.has(session.id)), ...rows];
+      }));
     }
   }, [userId]);
 
   // Check if user is admin (for development/testing)
   useEffect(() => {
-    // Check if the user is an admin by comparing the URL or sessionStorage secret to the public admin secret.
-    // This is only for development/testing and does not provide real security.
-    if (typeof window !== "undefined") {
-      const urlParams = new URLSearchParams(window.location.search)
-      const adminSecret = urlParams.get("admin")
-      const storedAdminSecret = sessionStorage.getItem(DEFAULT_VALUES.ADMIN_SECRET_KEY)
-      if (adminSecret === process.env.NEXT_PUBLIC_ADMIN_SECRET || storedAdminSecret === process.env.NEXT_PUBLIC_ADMIN_SECRET) {
-        setIsAdmin(true)
-        sessionStorage.setItem(DEFAULT_VALUES.ADMIN_SECRET_KEY, adminSecret || storedAdminSecret || "")
-      }
-    }
+    // The admin secret is typed into the URL (?admin=...) and verified by the server.
+    // It is never compiled into the client bundle.
+    const urlParams = new URLSearchParams(window.location.search)
+    const candidate = urlParams.get("admin") || sessionStorage.getItem(DEFAULT_VALUES.ADMIN_SECRET_KEY)
+    if (!candidate) return
+    fetch(API_ENDPOINTS.GLOBAL_SETTINGS, { method: "POST", headers: { "x-admin-secret": candidate } })
+      .then((res) => {
+        if (res.ok) {
+          sessionStorage.setItem(DEFAULT_VALUES.ADMIN_SECRET_KEY, candidate)
+          setIsAdmin(true)
+        } else {
+          sessionStorage.removeItem(DEFAULT_VALUES.ADMIN_SECRET_KEY)
+        }
+      })
+      .catch(() => {})
   }, [])
 
 
@@ -1076,54 +1158,49 @@ export default function TalkToMyself() {
 
 
 
-      // Complete background emotion analysis and save to Supabase
+      // Save now, without waiting for emotion analysis: the words and summary
+      // are what matter, and a slow or failed analysis must not cost the save.
       if (userId) {
-        // Run emotion analysis and Supabase save in background without blocking the UI
+        const reflectionData = {
+          id: newSession.id,
+          userId,
+          created_at: newSession.timestamp.toISOString(),
+          transcript,
+          summary,
+          emotions: [] as EmotionAnalysis[],
+          vocal: vocalCharacteristics,
+          device_info: {
+            ...getDeviceInfo(),
+            thread_id: newSession.threadId,
+            parent_session_id: newSession.parentSessionId,
+          },
+          browser_info: getBrowserInfo(),
+          location_info: null, // Could add geolocation if needed
+          tts_service_used: actualTTSService,
+          summary_service_used: globalSettings?.summary_service || 'unknown',
+          recording_duration: recordingDuration, // Store the actual duration from red bubble timer
+        };
         (async () => {
           try {
-            // Wait for emotion analysis to complete
-            const emotions = await emotionPromise;
-            console.log("Background emotion analysis completed:", emotions);
+            const saved = await persistReflection(reflectionData);
+            if (!saved) {
+              toast({
+                title: "Not saved yet",
+                description: "Your reflection is kept on this device and will be saved when the connection returns.",
+                variant: "destructive",
+              });
+            }
 
-            // Update the current session with emotions
+            const emotions = await emotionPromise;
             if (emotions && emotions.length > 0) {
-              console.log("Updating UI with emotions:", emotions);
-              setCurrentSession(prev => prev ? { ...prev, emotions } : null);
+              setCurrentSession(prev => prev && prev.id === newSession.id ? { ...prev, emotions } : prev);
               setSessions(prev => prev.map(session =>
                 session.id === newSession.id ? { ...session, emotions } : session
               ));
-
-              // Force a re-render to ensure the analysis tab shows the emotions
-              console.log("Emotions updated in UI, analysis tab should now show data");
+              // Same id, so this adds the emotions to the saved reflection (or to
+              // the queued copy when the first save has not gone through).
+              await persistReflection({ ...reflectionData, emotions });
             }
-
-            const reflectionData = {
-              id: newSession.id,
-              userId,
-              transcript,
-              summary,
-              emotions,
-              vocal: vocalCharacteristics,
-  device_info: {
-    ...getDeviceInfo(),
-    thread_id: newSession.threadId,
-    parent_session_id: newSession.parentSessionId,
-  },
-  browser_info: getBrowserInfo(),
-              location_info: null, // Could add geolocation if needed
-              tts_service_used: actualTTSService,
-              summary_service_used: globalSettings?.summary_service || 'unknown',
-              recording_duration: recordingDuration, // Store the actual duration from red bubble timer
-            };
-            console.log("Sending reflection data to Supabase (background):", reflectionData);
-            console.log("Recording duration from red bubble:", recordingDuration, "seconds");
-            const pendingKey = `em-pending-reflection-${userId}`;
-            localStorage.setItem(pendingKey, JSON.stringify(reflectionData));
-            setPendingReflection(reflectionData);
-            await saveReflectionToSupabase(reflectionData);
-            localStorage.removeItem(pendingKey);
-            setPendingReflection(null);
-            console.log("Reflection saved to Supabase successfully");
           } catch (err) {
             console.error("Failed to complete background processing:", err);
           }
@@ -1256,19 +1333,21 @@ export default function TalkToMyself() {
   // DEBT: Manual WAV header construction (`audioBufferToWav`) is verbose. Could be replaced by a library.
   //
   // Preprocess audio for Valence API requirements (44.1kHz, stereo, 5-30s)
-  // Preprocess audio for Valence API requirements (44.1kHz, stereo, 5-30s)
   const preprocessAudioForValence = async (audioBlob: Blob): Promise<Blob> => {
     let audioContext: AudioContext | null = null;
     try {
       console.log('Starting audio preprocessing for Valence...');
       console.log('Input blob:', { size: audioBlob.size, type: audioBlob.type });
 
-      audioContext = new AudioContext({ sampleRate: 44100 });
+      // [FIX 2025-12-15] Do NOT force sampleRate in constructor. iOS Safari fails if hardware is 48kHz.
+      // We will handle resampling later if needed.
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      audioContext = new AudioContextClass(); // Let browser pick native rate (e.g. 48000)
+
       const arrayBuffer = await audioBlob.arrayBuffer();
       console.log('ArrayBuffer size:', arrayBuffer.byteLength);
 
       const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-      // ... (rest of processing logic stays same until return) ...
       console.log('Decoded audio:', {
         duration: audioBuffer.duration,
         channels: audioBuffer.numberOfChannels,
@@ -1276,55 +1355,86 @@ export default function TalkToMyself() {
         length: audioBuffer.length
       });
 
-      // Valence discrete API has limits: minimum 5s, maximum ~30s
-      const minSamples = 44100 * 5; // 5 seconds
-      const maxSamples = 44100 * 30; // 30 seconds
+      // Validating and ensuring 44.1kHz output if simpler methods fail
+      let processingBuffer = audioBuffer;
 
-      // Truncate if too long
-      let processedBuffer = audioBuffer;
-      if (audioBuffer.length > maxSamples) {
-        processedBuffer = audioContext.createBuffer(
+      // If native rate is NOT 44100, we might want to resample. 
+      // Valence documentation prefers 44.1kHz.
+      if (audioBuffer.sampleRate !== 44100) {
+        console.log(`Resampling from ${audioBuffer.sampleRate} to 44100...`);
+        const offlineCtx = new OfflineAudioContext(
           audioBuffer.numberOfChannels,
-          maxSamples,
+          audioBuffer.duration * 44100,
           44100
         );
-        for (let channel = 0; channel < audioBuffer.numberOfChannels; channel++) {
-          const sourceData = audioBuffer.getChannelData(channel);
-          const targetData = processedBuffer.getChannelData(channel);
+        const source = offlineCtx.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(offlineCtx.destination);
+        source.start();
+        processingBuffer = await offlineCtx.startRendering();
+      }
+
+      const TARGET_SR = 44100;
+      const minSamples = TARGET_SR * 5; // 5 seconds
+      const maxSamples = TARGET_SR * 30; // 30 seconds
+
+      // Truncate if too long (logic relative to 44100 now)
+      let finalBuffer = processingBuffer;
+      if (processingBuffer.length > maxSamples) {
+        console.log("Truncating audio to 30s...");
+        finalBuffer = audioContext.createBuffer(
+          processingBuffer.numberOfChannels,
+          maxSamples,
+          TARGET_SR
+        );
+        for (let channel = 0; channel < processingBuffer.numberOfChannels; channel++) {
+          const sourceData = processingBuffer.getChannelData(channel);
+          const targetData = finalBuffer.getChannelData(channel);
           targetData.set(sourceData.subarray(0, maxSamples));
         }
       }
 
       // Ensure stereo (2 channels)
-      if (processedBuffer.numberOfChannels === 1) {
+      if (finalBuffer.numberOfChannels === 1) {
+        console.log("Up-mixing to stereo...");
         const stereoBuffer = audioContext.createBuffer(
           2,
-          processedBuffer.length,
-          44100
+          finalBuffer.length,
+          TARGET_SR
         );
-        const monoData = processedBuffer.getChannelData(0);
+        const monoData = finalBuffer.getChannelData(0);
         stereoBuffer.copyToChannel(monoData, 0);
         stereoBuffer.copyToChannel(monoData, 1);
-        processedBuffer = stereoBuffer;
+        finalBuffer = stereoBuffer;
+      } else {
+        // If we processed/truncated, we need to ensure we hold a valid buffer reference
+        // Note: If we already had 2 channels and didn't truncate, finalBuffer is processingBuffer.
       }
 
-      // Ensure minimum 5 seconds duration
-      let finalBuffer = processedBuffer;
-      if (processedBuffer.length < minSamples) {
-        finalBuffer = audioContext.createBuffer(
-          2,
+      // Final length check (minimum 5s)
+      // Since we might have replaced the buffer above, check finalBuffer again
+      if (finalBuffer.length < minSamples) {
+        console.log("Padding audio to minimum 5s...");
+        const paddedBuffer = audioContext.createBuffer(
+          2, // Force valid stereo for output
           minSamples,
-          44100
+          TARGET_SR
         );
-        for (let channel = 0; channel < 2; channel++) {
-          const sourceData = processedBuffer.getChannelData(channel);
-          const targetData = finalBuffer.getChannelData(channel);
-          targetData.set(sourceData);
+
+        // Copy existing data (handled channel count mismatch if any remaining)
+        const channelsToCopy = Math.min(finalBuffer.numberOfChannels, 2);
+        for (let i = 0; i < channelsToCopy; i++) {
+          paddedBuffer.copyToChannel(finalBuffer.getChannelData(i), i);
         }
+        // If source was mono but we need stereo padding:
+        if (finalBuffer.numberOfChannels === 1) {
+          paddedBuffer.copyToChannel(finalBuffer.getChannelData(0), 1);
+        }
+
+        finalBuffer = paddedBuffer;
       }
 
       console.log('Converting to WAV format...');
-      // Convert to WAV format
       const wavBlob = audioBufferToWav(finalBuffer);
       console.log('WAV blob created:', { size: wavBlob.size, type: wavBlob.type });
 
@@ -1332,10 +1442,10 @@ export default function TalkToMyself() {
     } catch (error) {
       console.error("Audio preprocessing error:", error);
       console.error("Error details:", error instanceof Error ? error.message : String(error));
-      // Return original blob if preprocessing fails
+      // Return original blob if preprocessing fails, but warn heavily
       return audioBlob;
     } finally {
-      if (audioContext) {
+      if (audioContext && audioContext.state !== 'closed') {
         await audioContext.close();
       }
     }
@@ -1461,13 +1571,15 @@ export default function TalkToMyself() {
   useEffect(() => {
     const fetchVoices = async () => {
       try {
-        const res = await fetch(API_ENDPOINTS.VOICE_ELEVENLABS_VOICES);
+        // Only the admin gets a voice list; everyone else uses the stock voice or their own clone.
+        if (!isAdmin) {
+          setElevenLabsVoices([]);
+          return;
+        }
+        const res = await fetch(API_ENDPOINTS.VOICE_ELEVENLABS_VOICES, { headers: adminHeaders() });
         if (res.ok) {
           const data = await res.json();
-          const customVoices = (data.voices || [])
-            .filter((v: any) => v.category === "cloned" || v.category === "generated" || v.category === "professional")
-            .map((v: any) => ({ id: v.voice_id, name: v.name, category: v.category }));
-          setElevenLabsVoices(customVoices);
+          setElevenLabsVoices((data.voices || []).map((v: any) => ({ id: v.voice_id, name: v.name, category: v.category })));
 
         }
       } catch (e) {
@@ -1475,7 +1587,7 @@ export default function TalkToMyself() {
       }
     };
     fetchVoices();
-  }, [globalSettings?.elevenlabs_voice_id]);
+  }, [globalSettings?.elevenlabs_voice_id, isAdmin]);
 
   // A configured voice clone is the default for every new reflection.
   useEffect(() => {
@@ -1749,11 +1861,10 @@ export default function TalkToMyself() {
   console.log('Voice selection:', { activeCustomVoiceId, hasVoiceClone, userVoiceCloneId, selectedElevenLabsVoice });
   if (activeCustomVoiceId) {
   try {
-  const payload = { text: summary, voiceId: activeCustomVoiceId };
-        console.log('Using voice clone for TTS:', payload);
+  const payload = { text: summary, voiceId: activeCustomVoiceId, userId };
         const response = await fetch(API_ENDPOINTS.VOICE_ELEVENLABS, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...adminHeaders() },
           body: JSON.stringify(payload),
         });
 
@@ -1791,11 +1902,10 @@ export default function TalkToMyself() {
     // Fallback to default ElevenLabs voice if configured
     if (globalSettings?.tts_service === 'elevenlabs') {
       try {
-        const payload = { text: summary, voiceId: activeCustomVoiceId || globalSettings?.elevenlabs_voice_id || DEFAULT_VALUES.ELEVENLABS_VOICE_ID };
-        console.log('Sending ElevenLabs TTS payload:', payload);
+        const payload = { text: summary, voiceId: activeCustomVoiceId || globalSettings?.elevenlabs_voice_id || DEFAULT_VALUES.ELEVENLABS_VOICE_ID, userId };
         const response = await fetch(API_ENDPOINTS.VOICE_ELEVENLABS, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...adminHeaders() },
           body: JSON.stringify(payload),
         });
         console.log('ElevenLabs API response status:', response.status);
@@ -2159,6 +2269,30 @@ export default function TalkToMyself() {
               )}
             </div>
 
+            {/* Unsaved reflections: visible on every tab until the server confirms them */}
+            {userId && pendingReflections.some((item) => !savingIds.includes(item.id)) && (
+              <div className="mx-auto flex max-w-2xl flex-col items-start gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-5 sm:flex-row sm:items-center sm:justify-between" role="status">
+                <p className="text-sm leading-relaxed text-amber-900">
+                  <strong>
+                    {pendingReflections.length === 1 ? "1 reflection is not saved yet." : `${pendingReflections.length} reflections are not saved yet.`}
+                  </strong>{" "}
+                  {pendingReflections.length === 1 ? "It is" : "They are"} kept on this device only. Avoid clearing your browser data until {pendingReflections.length === 1 ? "it is" : "they are"} saved.
+                </p>
+                <Button
+                  variant="outline"
+                  className="shrink-0 rounded-xl border-amber-400 bg-white text-amber-900 hover:bg-amber-100"
+                  onClick={async () => {
+                    const remaining = await retryPendingReflections(userId);
+                    toast(remaining === 0
+                      ? { title: "Saved", description: "Your reflections are now saved." }
+                      : { title: "Still not saved", description: "The save did not go through. Your reflections are still kept on this device.", variant: "destructive" as const });
+                  }}
+                >
+                  Save now
+                </Button>
+              </div>
+            )}
+
             {/* Recording Tab */}
             <TabsContent value="record" className="space-y-8">
               <Card className="bg-white/80 backdrop-blur-xl border-0 shadow-2xl rounded-3xl overflow-hidden">
@@ -2253,24 +2387,6 @@ export default function TalkToMyself() {
     <h3 className="font-semibold text-red-900">Your reflection was not processed</h3>
     <p className="mt-2 text-sm leading-relaxed text-red-800">{processingError}</p>
     <p className="mt-3 text-sm text-red-700">Your recording was not summarized or saved. Please try recording again. If this happens again, share this message when reporting the issue.</p>
-  {pendingReflection && userId && (
-    <button
-      type="button"
-      className="mt-4 rounded-lg bg-red-700 px-4 py-2 text-sm font-semibold text-white hover:bg-red-800"
-      onClick={async () => {
-        try {
-          setProcessingStage("Retrying save...");
-          await saveReflectionToSupabase(pendingReflection);
-          localStorage.removeItem(`em-pending-reflection-${userId}`);
-          setPendingReflection(null);
-          setProcessingError(null);
-          toast({ title: "Reflection recovered", description: "Your reflection is now saved to your account." });
-        } catch (error) {
-          setProcessingError(error instanceof Error ? error.message : "Recovery save failed. Your words are still retained for another retry.");
-        }
-      }}
-    >Retry saving this reflection</button>
-  )}
   </div>
   )}
 
@@ -2326,6 +2442,23 @@ export default function TalkToMyself() {
                             minute: "2-digit",
                           })}
                         </CardDescription>
+                        {userId && (
+                          <p
+                            className={cn(
+                              "mt-2 text-sm font-medium",
+                              pendingReflections.some((item) => item.id === currentSession.id)
+                                ? "text-amber-700"
+                                : "text-emerald-700",
+                            )}
+                            role="status"
+                          >
+                            {!pendingReflections.some((item) => item.id === currentSession.id)
+                              ? "✓ Saved to your history"
+                              : savingIds.includes(currentSession.id)
+                                ? "Saving…"
+                                : "Not saved yet. Kept on this device."}
+                          </p>
+                        )}
                       </div>
                       <div className="flex items-center space-x-3">
                         <Button
@@ -2415,17 +2548,17 @@ export default function TalkToMyself() {
                           <TooltipContent>
                             {hasVoiceClone
                               ? "Replace your existing voice clone with a new version using the current audio recording. This will create a fresh voice clone with the latest audio data."
-                              : "Clone your voice to hear reflections in your own voice. Audio is processed by ElevenLabs and not stored permanently."
+                              : "Clone your voice to hear reflections in your own voice. Your recording is sent to ElevenLabs, which keeps the voice clone until you delete it with Delete Clone."
                             }
                           </TooltipContent>
                         </Tooltip>
 
                         {/* Voice Clone Status Display */}
-  {elevenLabsVoices.length > 0 && (
+  {(elevenLabsVoices.length > 0 || (hasVoiceClone && userVoiceCloneId)) && (
   <div className={`mt-2 p-2 rounded-lg text-sm ${hasVoiceClone && userVoiceCloneId ? "bg-green-50 border border-green-200 text-green-800" : "bg-blue-50 border border-blue-200 text-blue-800"}`}>
   <div className="flex flex-col gap-2">
   <div className="flex items-center justify-between gap-3">
-  <span>{hasVoiceClone && userVoiceCloneId ? (selectedElevenLabsVoice && selectedElevenLabsVoice !== userVoiceCloneId ? "Custom ElevenLabs voice selected" : "Your voice clone is active") : "Choose a generated voice for synthesis"}</span>
+  <span>{hasVoiceClone && userVoiceCloneId ? (selectedElevenLabsVoice && selectedElevenLabsVoice !== userVoiceCloneId ? "Another voice selected" : "Your voice clone is active") : "Choose a voice for synthesis"}</span>
   {!hasVoiceClone && <span className="text-xs text-blue-600">No clone required</span>}
   </div>
   <label className="sr-only" htmlFor="elevenlabs-voice-select">Choose an ElevenLabs custom voice</label>
@@ -2441,14 +2574,11 @@ export default function TalkToMyself() {
   className="w-full rounded-md border border-current/20 bg-white px-2 py-1.5 text-sm"
   aria-label="Choose an ElevenLabs custom voice"
   >
-  <option value="">Default ElevenLabs voice</option>
-  {hasVoiceClone && userVoiceCloneId && <option value={userVoiceCloneId}>My voice clone ({userVoiceCloneId.slice(0, 3)})</option>}
-  {elevenLabsVoices.map((voice) => {
-    const displayName = voice.name
-      .replace(/^(User Voice Clone - )([a-z0-9]{3})[a-z0-9-]*/i, "$1$2")
-      .replace(/^user_([a-z0-9]{3})[a-z0-9-]*/i, "user_$1");
-    return <option key={voice.id} value={voice.id}>{displayName}</option>;
-  })}
+  <option value="">Default voice</option>
+  {hasVoiceClone && userVoiceCloneId && <option value={userVoiceCloneId}>My voice clone</option>}
+  {elevenLabsVoices.map((voice) => (
+    <option key={voice.id} value={voice.id}>{voice.name}</option>
+  ))}
   </select>
   </div>
   </div>
@@ -2650,8 +2780,9 @@ export default function TalkToMyself() {
                       </CardTitle>
                       <CardDescription className="text-gray-600 text-lg">
                         {/* [CHANGE: 2025-12-14] Updated label for clarity on probability distribution (adds to 100%) */}
-                        Top 3 emotions from voice tone using <strong>Valence AI</strong> (probability distribution - adds to 100%)
-                      </CardDescription>
+                        <p className="text-gray-600 mb-4">
+                          Top 3 predicted emotions from voice tone. (Showing highest probabilities from 7 total categories summing to 100%)
+                        </p>                </CardDescription>
                     </CardHeader>
                     <CardContent className="p-8">
                       {(() => {
@@ -2867,6 +2998,11 @@ export default function TalkToMyself() {
                                 <span className="inline-flex items-center rounded-full bg-purple-100 px-3 py-1 text-xs font-semibold text-purple-700">
                                   {session.parentSessionId ? "Follow-up reflection" : "Original reflection"}
                                 </span>
+                                {pendingReflections.some((item) => item.id === session.id) && (
+                                  <span className="inline-flex items-center rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">
+                                    {savingIds.includes(session.id) ? "Saving…" : "Not saved yet"}
+                                  </span>
+                                )}
                                 <span className="text-sm text-gray-500">
                                   {session.timestamp.toLocaleDateString("en-US", {
                                     month: "short",
@@ -2975,9 +3111,7 @@ export default function TalkToMyself() {
                         onChange={e => handleGlobalSettingsChange({ elevenlabs_voice_id: e.target.value })}
                       >
   {elevenLabsVoices.map(v => (
-  <option key={v.id} value={v.id}>{v.name
-  .replace(/^(User Voice Clone - )([a-z0-9]{3})[a-z0-9-]*/i, "$1$2")
-  .replace(/^user_([a-z0-9]{3})[a-z0-9-]*/i, "user_$1")}</option>
+  <option key={v.id} value={v.id}>{v.name}</option>
   ))}
                       </select>
                       <label>Hume Voice</label>

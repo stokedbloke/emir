@@ -8,8 +8,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Text is required" }, { status: 400 });
     }
 
-    console.log("Analyzing transcript content:", text);
-
     const huggingfaceApiKey = process.env.HUGGINGFACE_API_KEY;
     if (huggingfaceApiKey) {
       try {
@@ -24,10 +22,14 @@ export async function POST(request: NextRequest) {
         console.log("HuggingFace API response:", result);
 
         if (result && Array.isArray(result)) {
-          const emotions = result.map((item: any) => ({
-            emotion: item.label.charAt(0).toUpperCase() + item.label.slice(1),
-            confidence: item.score,
-          }));
+          const emotions = result
+            .filter((item: any) => item && item.label && typeof item.score === 'number')
+            .map((item: any) => ({
+              emotion: item.label.charAt(0).toUpperCase() + item.label.slice(1),
+              confidence: item.score
+            }))
+            .sort((a: any, b: any) => b.confidence - a.confidence)
+            .slice(0, 5); // [FIX] Limit to Top 5 only
 
           console.log("Final emotions analysis:", emotions);
           return NextResponse.json({ emotions });

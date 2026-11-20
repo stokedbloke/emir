@@ -24,13 +24,9 @@ export async function POST(request: Request) {
     // Parse the incoming JSON body
     const body = await request.json();
     const { id, userId, transcript, summary, emotions, vocal, recording_duration } = body;
-    console.log('API received recording_duration:', recording_duration);
-    console.log('API received recording_duration type:', typeof recording_duration);
-    console.log('API received full body:', JSON.stringify(body, null, 2));
 
     // If only userId is provided, fetch reflection history
     if (userId && !transcript && !summary && !emotions && !vocal) {
-      console.log('Fetching reflections for user:', userId);
       const { data, error } = await supabase
         .from('reflections')
         .select('*')
@@ -42,19 +38,38 @@ export async function POST(request: Request) {
         return Response.json({ error: error.message }, { status: 500 });
       }
 
-      console.log('Found reflections:', data?.length || 0);
-      if (data && data.length > 0) {
-        console.log('First reflection:', data[0]);
-        console.log('Last reflection:', data[data.length - 1]);
-      }
-
       return Response.json({ reflections: data || [] });
     }
 
+    if (typeof userId !== 'string' || !userId || typeof transcript !== 'string' || !transcript.trim()) {
+      return Response.json({ error: 'userId and a transcript are required' }, { status: 400 });
+    }
+
+    // A reflection is saved once right after the summary and again when the
+    // emotion analysis finishes, and the client retries failed saves. All of
+    // those carry the same id, so a repeat updates the row instead of failing.
+    let existing: { user_id: string } | null = null;
+    if (id) {
+      const { data: found, error: findError } = await supabase
+        .from('reflections')
+        .select('user_id')
+        .eq('id', id)
+        .maybeSingle();
+      if (findError) {
+        console.error('Supabase lookup error:', findError);
+        return Response.json({ error: findError.message }, { status: 500 });
+      }
+      if (found && found.user_id !== userId) {
+        return Response.json({ error: 'This reflection belongs to someone else' }, { status: 403 });
+      }
+      existing = found;
+    }
+
     // Upsert user (create if not exists, update last_active if exists)
-    await supabase.from('users').upsert([
+    const { error: userError } = await supabase.from('users').upsert([
       { id: userId, last_active: new Date() }
     ], { onConflict: 'id' });
+    if (userError) console.error('Supabase user upsert error:', userError);
 
     const parentSessionId = body.device_info?.parent_session_id;
     const threadId = body.device_info?.thread_id;
@@ -93,11 +108,19 @@ export async function POST(request: Request) {
       tts_service_used: body.tts_service_used || null,
       summary_service_used: body.summary_service_used || null,
     };
-    console.log('Inserting into Supabase:', JSON.stringify(insertData, null, 2));
 
-    const { data: savedReflection, error } = await supabase
-      .from('reflections')
-      .insert([insertData])
+    // A retried save can arrive long after the recording, so keep the time
+    // the reflection was made (never a future time).
+    const madeAt = typeof body.created_at === 'string' ? new Date(body.created_at) : null;
+    const createdAt = madeAt && !Number.isNaN(madeAt.getTime()) && madeAt.getTime() <= Date.now()
+      ? { created_at: madeAt.toISOString() }
+      : {};
+
+    const { id: _id, ...updateData } = insertData as typeof insertData & { id?: string };
+    const query = existing
+      ? supabase.from('reflections').update(updateData).eq('id', id).eq('user_id', userId)
+      : supabase.from('reflections').insert([{ ...insertData, ...createdAt }]);
+    const { data: savedReflection, error } = await query
       .select('id, created_at, device_info')
       .single();
 
@@ -106,8 +129,6 @@ export async function POST(request: Request) {
       console.error('Supabase insert error:', error);
       return Response.json({ error: error.message }, { status: 500 });
     }
-
-    console.log('Successfully inserted reflection into Supabase');
 
     // Success response
     return Response.json({ success: true, reflection: savedReflection });
