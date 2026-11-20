@@ -9,6 +9,7 @@ import { generateText } from "ai"
 import { createOpenAI } from "@ai-sdk/openai"
 import { createAnthropic } from "@ai-sdk/anthropic"
 import { createGoogleGenerativeAI } from "@ai-sdk/google"
+import { geminiApiKey } from '@/lib/gemini-key'
 
 export async function POST(request: Request) {
   console.log('=== SUMMARIZE API CALLED ===');
@@ -62,8 +63,8 @@ Rephrased reflection (FIRST PERSON ONLY):`
         console.log("Using Claude model");
         break
       case "gemini":
-        // Use Google Gemini (requires GOOGLE_API_KEY)
-        const googleApiKey = process.env.GOOGLE_API_KEY
+        // Use Google Gemini (GOOGLE_API_KEY_2 when set, otherwise GOOGLE_API_KEY)
+        const googleApiKey = geminiApiKey()
         console.log("Google API key present:", !!googleApiKey);
         if (!googleApiKey) {
           console.error("Google API key not configured");

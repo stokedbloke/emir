@@ -1,7 +1,7 @@
 // API Route: Rate the emotions expressed in a transcript.
 // Receives a POST request with { text } and returns the top emotions found in the words.
 // Environment variables used (private, server-side only):
-//   GOOGLE_API_KEY (Gemini, primary - the same key the summary uses)
+//   GOOGLE_API_KEY_2 or GOOGLE_API_KEY (Gemini, primary - the same key the summary uses)
 //   HUGGINGFACE_API_KEY (optional fallback when Gemini fails)
 //
 // Returns: { emotions: Array<{ emotion: string, confidence: number }> } (top 5,
@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { generateObject } from 'ai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { z } from 'zod';
+import { geminiApiKey } from '@/lib/gemini-key';
 
 // Same label set as the earlier HuggingFace model (GoEmotions), so new and old
 // reflections in a user's history use the same vocabulary.
@@ -107,7 +108,7 @@ export async function POST(request: NextRequest) {
     }
 
     const services: Array<[string, string | undefined, (text: string, key: string) => Promise<Emotion[]>]> = [
-      ['gemini', process.env.GOOGLE_API_KEY, withGemini],
+      ['gemini', geminiApiKey(), withGemini],
       ['huggingface', process.env.HUGGINGFACE_API_KEY, withHuggingFace],
     ];
 
