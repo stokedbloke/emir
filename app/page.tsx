@@ -957,9 +957,9 @@ export default function TalkToMyself() {
     }
   }
 
-  // Measures pauses in the recording. Loudness is judged relative to this
+  // Measures pauses, level, brightness and pitch in the recording. Loudness is judged relative to this
   // recording's own level, so a quiet microphone does not read as silence.
-  const analyzePauses = async (audioBlob: Blob): Promise<{ durationSeconds: number; pauseRatio: number; longestPauseSeconds: number } | null> => {
+  const analyzeVoice = async (audioBlob: Blob): Promise<{ durationSeconds: number; pauseRatio: number; longestPauseSeconds: number; levelDb: number; brightnessHz: number; pitchHz?: number; pitchVariationSemitones?: number } | null> => {
     try {
       const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       const decodedAudio = await audioContext.decodeAudioData(await audioBlob.arrayBuffer());
@@ -999,13 +999,87 @@ export default function TalkToMyself() {
         }
       }
       const spokenFrames = last - first + 1;
+
+      // Level and brightness, over the frames that contain speech.
+      let energy = 0;
+      let crossings = 0;
+      let speechSamples = 0;
+      for (let frame = first; frame <= last; frame++) {
+        if (levels[frame] < threshold) continue;
+        const start = frame * frameSize;
+        for (let i = start; i < start + frameSize; i++) {
+          energy += channelData[i] * channelData[i];
+          if (i > start && (channelData[i] >= 0) !== (channelData[i - 1] >= 0)) crossings++;
+        }
+        speechSamples += frameSize;
+      }
+      const levelDb = 20 * Math.log10(Math.sqrt(energy / speechSamples));
+      const brightnessHz = crossings / (speechSamples / decodedAudio.sampleRate);
+
+      // Pitch: for each speech frame, find the delay at which the waveform best
+      // matches itself (autocorrelation). Done on a reduced-rate copy to stay fast.
+      const step = Math.max(1, Math.round(decodedAudio.sampleRate / 8000));
+      const rate = decodedAudio.sampleRate / step;
+      const reduced = new Float32Array(Math.floor(channelData.length / step));
+      for (let i = 0; i < reduced.length; i++) {
+        let sum = 0;
+        for (let j = 0; j < step; j++) sum += channelData[i * step + j];
+        reduced[i] = sum / step;
+      }
+      const span = Math.round(rate * 0.04);
+      const minLag = Math.floor(rate / 400); // highest pitch considered: 400 Hz
+      const maxLag = Math.ceil(rate / 70);   // lowest pitch considered: 70 Hz
+      const pitches: number[] = [];
+      // At most ~1500 frames, spread evenly, so long recordings stay quick.
+      const stride = Math.max(2, Math.ceil(spokenFrames / 1500));
+      for (let frame = first; frame <= last; frame += stride) {
+        if (levels[frame] < threshold) continue;
+        const start = Math.floor((frame * frameSize) / step);
+        if (start + span + maxLag >= reduced.length) break;
+        let power = 0;
+        for (let i = 0; i < span; i++) power += reduced[start + i] * reduced[start + i];
+        if (power === 0) continue;
+        let bestLag = 0;
+        let best = 0;
+        for (let lag = minLag; lag <= maxLag; lag++) {
+          let match = 0;
+          let lagPower = 0;
+          for (let i = 0; i < span; i++) {
+            match += reduced[start + i] * reduced[start + i + lag];
+            lagPower += reduced[start + i + lag] * reduced[start + i + lag];
+          }
+          const score = lagPower > 0 ? match / Math.sqrt(power * lagPower) : 0;
+          // Prefer the shortest delay among near-equal matches, which avoids
+          // reading the pitch an octave too low.
+          if (score > best * 1.05) {
+            best = score;
+            bestLag = lag;
+          }
+        }
+        // Whispered or noisy frames match themselves poorly; skip them.
+        if (best >= 0.6 && bestLag > 0) pitches.push(rate / bestLag);
+      }
+      let pitch: { pitchHz: number; pitchVariationSemitones: number } | null = null;
+      if (pitches.length >= 10) {
+        pitches.sort((x, y) => x - y);
+        const at = (fraction: number) => pitches[Math.min(pitches.length - 1, Math.floor(pitches.length * fraction))];
+        // Spread between the 10th and 90th percentile, so stray misreadings don't count.
+        pitch = {
+          pitchHz: Math.round(at(0.5)),
+          pitchVariationSemitones: Math.round(12 * Math.log2(at(0.9) / at(0.1)) * 10) / 10,
+        };
+      }
+
       return {
         durationSeconds: spokenFrames * frameSeconds,
         pauseRatio: pauseFrames / spokenFrames,
         longestPauseSeconds: longest * frameSeconds,
+        levelDb: Math.round(levelDb * 10) / 10,
+        brightnessHz: Math.round(brightnessHz),
+        ...(pitch || {}),
       };
     } catch (error) {
-      console.error("Pause analysis failed:", error);
+      console.error("Voice analysis failed:", error);
       return null;
     }
   };
@@ -1020,6 +1094,15 @@ export default function TalkToMyself() {
 
   const paceLabel = (wpm: number) =>
     wpm < 110 ? "Unhurried" : wpm < 150 ? "Conversational" : wpm < 180 ? "Brisk" : "Fast";
+
+  // Labels for the voice measurements. The cut-offs are starting points chosen
+  // from typical speech, not calibrated on this app's recordings.
+  const toneLabel = (brightnessHz: number) =>
+    brightnessHz < 1500 ? "Warm" : brightnessHz < 3000 ? "Balanced" : "Bright";
+  const pitchLabel = (semitones: number) =>
+    semitones < 4 ? "Steady" : semitones < 8 ? "Varied" : "Expressive";
+  const volumeLabel = (levelDb: number) =>
+    levelDb < -32 ? "Gentle" : levelDb < -20 ? "Moderate" : "Strong";
 
   const sessionWordsPerMinute = (session: SessionData): number | null =>
     session.vocalCharacteristics?.wordsPerMinute
@@ -1082,14 +1165,26 @@ export default function TalkToMyself() {
       // Move non-essential analysis (emotions, vocal characteristics) to background
       const startTime = Date.now();
       const [pauses, summary] = await Promise.all([
-        analyzePauses(audioBlob),
+        analyzeVoice(audioBlob),
         generateSummary(transcript)
       ]);
       // Prefer the measured span of speech; fall back to the recording timer.
       const wordsPerMinute = wordsPerMinuteFor(transcript, pauses?.durationSeconds || currentRecordingTimeRef.current);
       const vocalCharacteristics: VocalCharacteristics = {
         ...(wordsPerMinute ? { wordsPerMinute, pace: paceLabel(wordsPerMinute) } : {}),
-        ...(pauses ? { pauseRatio: pauses.pauseRatio, longestPauseSeconds: pauses.longestPauseSeconds } : {}),
+        ...(pauses ? {
+          pauseRatio: pauses.pauseRatio,
+          longestPauseSeconds: pauses.longestPauseSeconds,
+          levelDb: pauses.levelDb,
+          volume: volumeLabel(pauses.levelDb),
+          brightnessHz: pauses.brightnessHz,
+          tone: toneLabel(pauses.brightnessHz),
+        } : {}),
+        ...(pauses?.pitchHz && typeof pauses.pitchVariationSemitones === "number" ? {
+          pitchHz: pauses.pitchHz,
+          pitchVariationSemitones: pauses.pitchVariationSemitones,
+          pitch: pitchLabel(pauses.pitchVariationSemitones),
+        } : {}),
       };
       const processingTime = Date.now() - startTime;
       console.log(`Essential processing completed in ${processingTime}ms`);
@@ -2850,10 +2945,10 @@ export default function TalkToMyself() {
                         <div className="w-8 h-8 bg-gradient-to-br from-indigo-400 to-purple-500 rounded-lg flex items-center justify-center">
                           <Waves className="w-4 h-4 text-white" />
                         </div>
-                        <span>Pace and Pauses</span>
+                        <span>Voice Patterns</span>
                       </CardTitle>
                       <CardDescription className="text-gray-600 text-lg">
-                        Measured from this recording and its transcript
+                        Measured from this recording and its transcript. Pace and pauses are direct measurements; tone, pitch and volume are estimates.
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="p-8">
@@ -2873,6 +2968,26 @@ export default function TalkToMyself() {
                             : `${wpm > usual ? "Faster" : "Slower"} than your usual ${usual} words per minute across ${others.length} other reflections.`
                           : null;
                         const hasPauses = typeof vocal.pauseRatio === "number";
+                        const estimates = [
+                          typeof vocal.brightnessHz === "number" && {
+                            name: "Tone",
+                            label: vocal.tone,
+                            detail: "Brightness of the sound while you speak",
+                            help: "Estimated from how often the sound wave crosses zero while you speak. More crossings means a brighter, crisper sound; fewer means a warmer one. The microphone affects this.",
+                          },
+                          typeof vocal.pitchHz === "number" && {
+                            name: "Pitch",
+                            label: vocal.pitch,
+                            detail: `Around ${vocal.pitchHz} Hz, moving across about ${vocal.pitchVariationSemitones} semitones`,
+                            help: "Your typical voice pitch in this recording, and how far it moved. A small range reads as steady, a wide range as expressive. Background noise can throw this off.",
+                          },
+                          typeof vocal.levelDb === "number" && {
+                            name: "Volume",
+                            label: vocal.volume,
+                            detail: "Average level while speaking",
+                            help: "Average loudness of the recording while you speak. It depends on your microphone and how close you are to it, so compare it with your own other reflections rather than with anyone else's.",
+                          },
+                        ].filter(Boolean) as Array<{ name: string; label?: string; detail: string; help: string }>;
                         if (!wpm && !hasPauses) {
                           return (
                             <div className="flex items-center justify-center py-4 bg-gray-50/50 rounded-xl border border-dashed border-gray-200">
@@ -2917,6 +3032,24 @@ export default function TalkToMyself() {
                                 {(vocal.longestPauseSeconds || 0) > 0 && (
                                   <p className="mt-2 text-sm text-gray-600">Longest pause: {(vocal.longestPauseSeconds || 0).toFixed(1)} seconds.</p>
                                 )}
+                              </div>
+                            )}
+                            {estimates.length > 0 && (
+                              <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-3 gap-6">
+                                {estimates.map((item) => (
+                                  <div key={item.name} className="p-6 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-2xl border border-indigo-100">
+                                    <div className="flex items-center justify-between">
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <span className="text-gray-700 font-medium underline decoration-dotted cursor-help">{item.name}</span>
+                                        </TooltipTrigger>
+                                        <TooltipContent className="max-w-xs">{item.help}</TooltipContent>
+                                      </Tooltip>
+                                      <Badge className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white">{item.label}</Badge>
+                                    </div>
+                                    <p className="mt-3 text-sm text-gray-600">{item.detail} (estimate).</p>
+                                  </div>
+                                ))}
                               </div>
                             )}
                           </div>

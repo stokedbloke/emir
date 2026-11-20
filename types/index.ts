@@ -1,8 +1,10 @@
 // Extracted type definitions from app/page.tsx
 // Generated during refactoring - do not edit manually
 
-// Measured delivery stats. Reflections saved before these were measured only
-// carry the old estimated labels (tone, pitch, volume), which are no longer shown.
+// Delivery stats measured from the recording. tone, pitch and volume hold a
+// short label; the numbers they are derived from sit beside them. Reflections
+// saved before the numbers existed carry only the old estimated labels, which
+// are not shown.
 export interface VocalCharacteristics {
   pace?: string
   wordsPerMinute?: number
@@ -10,8 +12,15 @@ export interface VocalCharacteristics {
   pauseRatio?: number
   longestPauseSeconds?: number
   tone?: string
+  // Zero crossings per second while speaking: a rough stand-in for brightness.
+  brightnessHz?: number
   pitch?: string
+  // Typical (median) voice pitch and how far it moves, in semitones.
+  pitchHz?: number
+  pitchVariationSemitones?: number
   volume?: string
+  // Average speaking level relative to the loudest the recording format allows (0 dB).
+  levelDb?: number
   confidence?: number
 }
 
