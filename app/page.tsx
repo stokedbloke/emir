@@ -49,6 +49,8 @@ import { AppHeader } from "@/components/AppHeader";
 import { useSettings } from "@/hooks/useSettings";
 import { useAccount } from "@/hooks/useAccount";
 import { AccountPanel } from "@/components/AccountPanel";
+import { JournalPrompt } from "@/components/JournalPrompt";
+import { PromptManager } from "@/components/PromptManager";
 import { useServiceStatus } from "@/hooks/useServiceStatus";
 
 
@@ -2525,6 +2527,9 @@ export default function TalkToMyself() {
   </div>
   )}
 
+  {/* A suggestion to speak to, set by the admin. Stays visible while recording. */}
+  {!isProcessing && !processingError && <JournalPrompt compact={isRecording} />}
+
   {/* Gentle guidance */}
   {!isRecording && !isProcessing && !processingError && (
   <div className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-2xl p-8 max-w-2xl">
@@ -3326,6 +3331,8 @@ export default function TalkToMyself() {
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="p-8 space-y-12">
+                    <PromptManager adminHeaders={adminHeaders} />
+
                     {/* Service Preferences Section */}
                     <div className="space-y-6">
                       <h3 className="text-xl font-semibold text-gray-800">Service Preferences</h3>
