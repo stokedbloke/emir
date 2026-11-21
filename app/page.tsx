@@ -44,7 +44,11 @@ import { VocalCharacteristics, EmotionAnalysis, SessionData, GlobalSettings, Tra
 
 // Vercel refuses uploads over 4.5 MB, so larger recordings keep the browser transcript.
 const SERVER_TRANSCRIPT_MAX_BYTES = 4 * 1024 * 1024;
-const SERVER_TRANSCRIPT_TIMEOUT_MS = 17000;
+// How long to wait for the server transcript before using the browser's: a
+// base wait plus a little per second of recording, up to a ceiling.
+const SERVER_TRANSCRIPT_BASE_WAIT_MS = 6000;
+const SERVER_TRANSCRIPT_WAIT_PER_SECOND_MS = 50;
+const SERVER_TRANSCRIPT_MAX_WAIT_MS = 12000;
 import { API_ENDPOINTS, AUDIO_CONSTANTS, UI_CONSTANTS, DEFAULT_VALUES, SPEECH_TRIGGERS } from "@/constants";
 import { calculateWordCount, formatTime, getDeviceInfo, getBrowserInfo, playChime } from "@/utils";
 import { LoadingStates } from "@/components/LoadingStates";
@@ -390,18 +394,49 @@ export default function TalkToMyself() {
     return () => window.removeEventListener("online", onOnline);
   }, [userId]);
 
-  // Load voice clone state from localStorage
+  // The voice clone belongs to the person, not the browser. Start from what
+  // this browser remembers, then ask the server which clone this history owns,
+  // so a clone made on another device (or before signing in) is found here too.
   useEffect(() => {
-    if (userId) {
-      const storedVoiceId = localStorage.getItem(`${DEFAULT_VALUES.USER_VOICE_CLONE_PREFIX}${userId}`);
-      console.log('Loading voice clone state:', { userId, storedVoiceId, isMobile: /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) });
-      if (storedVoiceId) {
-        setUserVoiceCloneId(storedVoiceId);
-        setHasVoiceClone(true);
-        setSelectedElevenLabsVoice(storedVoiceId);
-        console.log('Voice clone loaded from localStorage and selected as default:', storedVoiceId);
+    if (!userId) return;
+    let cancelled = false;
+    const cloneKey = `${DEFAULT_VALUES.USER_VOICE_CLONE_PREFIX}${userId}`;
+    const choiceKey = `em-elevenlabs-voice-${userId}`;
+    const remembered = localStorage.getItem(cloneKey);
+    setUserVoiceCloneId(remembered);
+    setHasVoiceClone(Boolean(remembered));
+    if (remembered) setSelectedElevenLabsVoice(remembered);
+
+    (async () => {
+      try {
+        const response = await fetch(API_ENDPOINTS.VOICE_CLONE_MINE, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+          body: JSON.stringify({ userId }),
+        });
+        // If the server cannot say, keep what this browser remembers.
+        if (!response.ok || cancelled) return;
+        const { voiceId } = await response.json();
+        if (cancelled || voiceId === remembered) return;
+        if (typeof voiceId === 'string' && voiceId) {
+          localStorage.setItem(cloneKey, voiceId);
+          // Keep a deliberate choice of another voice; otherwise use the clone.
+          const choice = localStorage.getItem(choiceKey);
+          if (choice === null || choice === remembered) localStorage.setItem(choiceKey, voiceId);
+          setUserVoiceCloneId(voiceId);
+          setHasVoiceClone(true);
+        } else {
+          // The remembered clone no longer exists.
+          localStorage.removeItem(cloneKey);
+          if (localStorage.getItem(choiceKey) === remembered) localStorage.removeItem(choiceKey);
+          setUserVoiceCloneId(null);
+          setHasVoiceClone(false);
+        }
+      } catch (error) {
+        console.warn('Could not check for a voice clone:', error);
       }
-    }
+    })();
+    return () => { cancelled = true; };
   }, [userId]);
 
 
@@ -900,6 +935,11 @@ export default function TalkToMyself() {
           variant: "destructive",
         });
         stopRecording();
+      } else if (event.error === "aborted") {
+        // The browser ended this listening session itself (for example when
+        // recording stops, or another tab takes the microphone). Not a fault:
+        // listening restarts on its own while a recording is still running.
+        console.log("Speech recognition aborted (ignored)");
       } else if (event.error === "no-speech") {
         // Ignore no-speech errors completely - silence is natural in speech
         // Users pause to think, breathe, or structure thoughts
@@ -1378,7 +1418,10 @@ export default function TalkToMyself() {
       const response = await fetch(API_ENDPOINTS.TRANSCRIBE_AUDIO, {
         method: "POST",
         body: formData,
-        signal: AbortSignal.timeout(SERVER_TRANSCRIPT_TIMEOUT_MS),
+        signal: AbortSignal.timeout(Math.min(
+          SERVER_TRANSCRIPT_MAX_WAIT_MS,
+          SERVER_TRANSCRIPT_BASE_WAIT_MS + currentRecordingTimeRef.current * SERVER_TRANSCRIPT_WAIT_PER_SECOND_MS,
+        )),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) return done("", `http_${response.status}`);
@@ -1866,10 +1909,8 @@ export default function TalkToMyself() {
         } else {
           const errorData = await response.json().catch(() => ({}));
 
-          // Check if it's an API limit error
-          if (response.status === 403 && errorData.detail && errorData.detail.status === 'voice_add_edit_limit_reached') {
-            throw new Error('API_LIMIT_REACHED');
-          }
+          if (errorData.code === 'voice_limit_reached') throw new Error('VOICE_SLOTS_FULL');
+          if (errorData.code === 'voice_add_edit_limit_reached') throw new Error('API_LIMIT_REACHED');
 
           throw new Error(errorData.detail?.message || errorData.error || 'Failed to create voice clone');
         }
@@ -1879,7 +1920,9 @@ export default function TalkToMyself() {
       const errorMessage = error instanceof Error ? error.message : "Please try again or use the default voice.";
 
       // Set error state for UI display instead of invasive toast
-      if (errorMessage === 'API_LIMIT_REACHED') {
+      if (errorMessage === 'VOICE_SLOTS_FULL') {
+        setVoiceCloneError('Voice cloning is full at the moment, so a new clone cannot be made. Your reflection still plays in the default voice.');
+      } else if (errorMessage === 'API_LIMIT_REACHED') {
         setVoiceCloneError('Voice clone limit reached. Try again next month or use the default voice.');
   } else {
   setVoiceCloneError(`Unable to create voice clone: ${errorMessage}. Your existing clone remains unchanged; you can still use it or the default voice.`);
@@ -2553,7 +2596,7 @@ export default function TalkToMyself() {
                   <p className="text-center text-sm text-gray-500">
                     Been here before on another device?{" "}
                     <button type="button" className="text-purple-700 underline decoration-dotted hover:text-purple-900" onClick={() => setShowSignIn(true)}>
-                      Sign in to see your history
+                      Sign in to see your reflections
                     </button>
                   </p>
                 )
@@ -2589,7 +2632,7 @@ export default function TalkToMyself() {
                             role="status"
                           >
                             {!pendingReflections.some((item) => item.id === currentSession.id)
-                              ? "✓ Saved to your history"
+                              ? "✓ Saved to your reflections"
                               : savingIds.includes(currentSession.id)
                                 ? "Saving…"
                                 : "Not saved yet. Kept on this device."}

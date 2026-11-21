@@ -151,7 +151,7 @@ export function useAccount() {
         return { ok: false, error: /invalid/i.test(error.message) ? 'That email and password do not match an account' : error.message };
       }
       const session = await openSession({ legacyId: null, mergeFromToken: previousToken });
-      if (!session) return { ok: false, error: 'Signed in, but your history could not be loaded. Reload the page.' };
+      if (!session) return { ok: false, error: 'Signed in, but your reflections could not be loaded. Reload the page.' };
       if (previousUserId && previousUserId !== session.userId) movePendingReflections(previousUserId, session.userId);
       localStorage.setItem(USER_ID_KEY, session.userId);
       setEmail(session.email);

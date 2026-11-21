@@ -6,12 +6,14 @@
 //   A browser that already had a bare ID (legacyId) keeps its history, unless
 //   another session claimed that ID first.
 // - mergeFromToken: after signing in to an account on a device that already
-//   had anonymous reflections, moves those reflections into the account.
+//   had anonymous reflections, moves those reflections into the account. A
+//   voice clone made in that browser moves too, unless the account has one.
 //
 // Returns: { userId, email } or { error }. 503 with error "accounts_not_set_up"
 // means supabase/account_links.sql has not been run; the app then keeps
 // working with the bare ID as before.
 import { AccountsNotSetUp, adminClient, bearerToken, isClaimed, linkedUserId, userFromToken } from '@/lib/account';
+import { moveClone } from '@/lib/voice-ownership';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -54,6 +56,14 @@ export async function POST(request: Request) {
           const { data, error } = await supabase.from('reflections').update({ user_id: userId }).eq('user_id', previousUserId).select('id');
           if (error) throw new Error(error.message);
           merged = data?.length ?? 0;
+          // The voice clone follows the reflections. A failure here must not
+          // undo the sign-in; the clone is simply left where it was.
+          const elevenLabsKey = process.env.ELEVENLABS_API_KEY;
+          if (elevenLabsKey) {
+            await moveClone(previousUserId, userId as string, elevenLabsKey).catch((cloneError) => {
+              console.error('Could not move the voice clone:', cloneError instanceof Error ? cloneError.message : cloneError);
+            });
+          }
           // The anonymous session is finished; removing it also removes its link.
           await supabase.auth.admin.deleteUser(previous.authUserId);
         }

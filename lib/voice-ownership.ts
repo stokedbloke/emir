@@ -68,6 +68,53 @@ export async function fetchVoice(voiceId: string, apiKey: string): Promise<Eleve
   return (await response.json()) as ElevenLabsVoice;
 }
 
+type ListedVoice = ElevenLabsVoice & { created_at_unix?: number | null };
+
+/** Every clone in the ElevenLabs account made for this user, newest first. */
+export async function ownClones(userId: string, apiKey: string): Promise<ListedVoice[]> {
+  if (!userId) return [];
+  const response = await fetch(`${ELEVENLABS_API}/voices`, { headers: { 'xi-api-key': apiKey }, cache: 'no-store' });
+  if (!response.ok) throw new Error(`ElevenLabs voice list failed: ${response.status}`);
+  const voices: ListedVoice[] = (await response.json()).voices || [];
+  return voices
+    .filter((voice) => isUserClone(voice) && isOwnedBy(voice, userId))
+    .sort((a, b) => (b.created_at_unix || 0) - (a.created_at_unix || 0));
+}
+
+export async function deleteVoice(voiceId: string, apiKey: string): Promise<boolean> {
+  const response = await fetch(`${ELEVENLABS_API}/voices/${encodeURIComponent(voiceId)}`, {
+    method: 'DELETE',
+    headers: { 'xi-api-key': apiKey },
+  });
+  return response.ok;
+}
+
+/**
+ * Hands one history's clone to another, for when a browser's reflections are
+ * merged into an account. An account keeps one clone: if it already has one,
+ * the incoming clone is deleted (freeing its slot); otherwise the incoming
+ * clone is renamed so it belongs to the account.
+ */
+export async function moveClone(fromUserId: string, toUserId: string, apiKey: string): Promise<'none' | 'moved' | 'dropped'> {
+  if (!fromUserId || !toUserId || fromUserId === toUserId) return 'none';
+  const incoming = await ownClones(fromUserId, apiKey);
+  if (incoming.length === 0) return 'none';
+  const [newest, ...older] = incoming;
+  const accountHasClone = (await ownClones(toUserId, apiKey)).length > 0;
+  for (const voice of accountHasClone ? incoming : older) await deleteVoice(voice.voice_id, apiKey);
+  if (accountHasClone) return 'dropped';
+
+  const form = new FormData();
+  form.append('name', cloneNameFor(toUserId));
+  const response = await fetch(`${ELEVENLABS_API}/voices/${encodeURIComponent(newest.voice_id)}/edit`, {
+    method: 'POST',
+    headers: { 'xi-api-key': apiKey },
+    body: form,
+  });
+  if (!response.ok) throw new Error(`ElevenLabs voice rename failed: ${response.status}`);
+  return 'moved';
+}
+
 // The stock voice every user gets ("River"). Mirrors DEFAULT_VALUES.ELEVENLABS_VOICE_ID.
 export const STOCK_VOICE_ID = 'SAz9YHcvj6GT2YYXdXww';
 

@@ -43,7 +43,7 @@ export function AccountPanel({ initialMode, onSignUp, onSignIn, onDone, onDismis
       <div className="flex items-start justify-between gap-4">
         <div>
           <h3 className="text-lg font-semibold text-gray-800">
-            {isSignUp ? "Keep your reflections across devices" : "Sign in to your history"}
+            {isSignUp ? "Keep your reflections across devices" : "Sign in to your reflections"}
           </h3>
           <p className="mt-1 text-sm leading-relaxed text-gray-600">
             {isSignUp

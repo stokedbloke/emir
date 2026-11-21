@@ -15,7 +15,7 @@ export const maxDuration = 30;
 
 // Vercel refuses request bodies over 4.5 MB before they reach this route.
 const MAX_BYTES = 4.2 * 1024 * 1024;
-const TIMEOUT_MS = 15000;
+const TIMEOUT_MS = 12000;
 const AUDIO_TYPES = ['audio/webm', 'audio/mp4', 'audio/ogg', 'audio/wav', 'audio/mpeg', 'audio/aac', 'audio/flac'];
 
 export async function POST(request: Request) {

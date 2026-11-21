@@ -8,7 +8,7 @@
 //
 // Returns: { voiceId: string, success: boolean } on success, or { error: string } on failure.
 //
-import { cloneNameFor } from '@/lib/voice-ownership';
+import { cloneNameFor, deleteVoice, ownClones } from '@/lib/voice-ownership';
 import { resolveUserId } from '@/lib/account';
 
 export async function POST(request: Request) {
@@ -43,10 +43,25 @@ export async function POST(request: Request) {
     if (!response.ok) {
       const errorText = await response.text().catch(() => 'Unknown error');
       console.error('ElevenLabs voice clone API error:', errorText);
+      // Tell the app when the cause is a plan limit, so it can say so plainly:
+      // voice_limit_reached (every voice slot is in use) or
+      // voice_add_edit_limit_reached (this month's clone changes are used up).
+      const code = /"status"\s*:\s*"(voice_limit_reached|voice_add_edit_limit_reached)"/.exec(errorText)?.[1];
+      if (code) return Response.json({ error: 'Failed to create voice clone', code }, { status: 409 });
       throw new Error(`ElevenLabs API failed: ${response.status} - ${errorText}`);
     }
 
     const data = await response.json();
+
+    // One clone per person: remove any earlier clone this browser did not know
+    // about (for example one made on another device), so it does not hold a slot.
+    try {
+      for (const voice of await ownClones(userId, apiKey)) {
+        if (voice.voice_id !== data.voice_id) await deleteVoice(voice.voice_id, apiKey);
+      }
+    } catch (cleanupError) {
+      console.warn('Could not remove an earlier clone:', cleanupError instanceof Error ? cleanupError.message : cleanupError);
+    }
 
     return Response.json({
       voiceId: data.voice_id,

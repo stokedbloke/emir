@@ -13,6 +13,7 @@ export const API_ENDPOINTS = {
   VOICE_ELEVENLABS: '/api/voice/elevenlabs',
   VOICE_ELEVENLABS_VOICES: '/api/voice/elevenlabs/voices',
   VOICE_CLONE: '/api/voice-clone',
+  VOICE_CLONE_MINE: '/api/voice-clone/mine',
   VOICE_CLONE_IMPROVE: '/api/voice-clone/improve',
   VOICE_CLONE_DELETE: '/api/voice-clone/delete'
 } as const;
