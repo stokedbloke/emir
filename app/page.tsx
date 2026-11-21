@@ -354,19 +354,18 @@ export default function TalkToMyself() {
     }
   }, [globalSettings?.tts_service]);
 
-  // When the identity changes (signing in or out), start from that person's
-  // history rather than showing the previous one.
+  // Signing out starts this browser afresh, so clear what was on screen.
+  // Signing in does not: this browser's reflections move into the account, so
+  // the open reflection and the current tab stay as they are.
   const previousUserIdRef = useRef("");
   useEffect(() => {
-    if (previousUserIdRef.current && previousUserIdRef.current !== userId) {
+    if (previousUserIdRef.current && previousUserIdRef.current !== userId && !accountEmail) {
       setSessions([]);
       setCurrentSession(null);
       setActiveTab("record");
     }
     previousUserIdRef.current = userId;
-    try {
-    } catch {}
-  }, [userId]);
+  }, [userId, accountEmail]);
 
   // Recover reflections whose server save failed: show them in the history and
   // try saving again now, and whenever the connection comes back.
@@ -3310,6 +3309,7 @@ export default function TalkToMyself() {
                             >
                               Sign out
                             </button>
+                            {hasVoiceClone && <span className="mt-1 block text-gray-600">Your voice clone is saved with this account.</span>}
                           </p>
                         ) : (
                           <p>
