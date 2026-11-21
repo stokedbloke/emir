@@ -47,7 +47,7 @@ export function AccountPanel({ initialMode, onSignUp, onSignIn, onDone, onDismis
           </h3>
           <p className="mt-1 text-sm leading-relaxed text-gray-600">
             {isSignUp
-              ? "Optional. Your history currently lives in this browser only. Add an email and password to open it on another device, or to get it back if this browser's data is cleared."
+              ? "Optional. Your reflections currently live in this browser only. Add an email and password to open them on another device, or to get them back if this browser's data is cleared."
               : "Reflections you have made in this browser will be added to your account."}
           </p>
         </div>

@@ -57,6 +57,7 @@ import { AppHeader } from "@/components/AppHeader";
 import { useSettings } from "@/hooks/useSettings";
 import { useAccount } from "@/hooks/useAccount";
 import { AccountPanel } from "@/components/AccountPanel";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { JournalPrompt } from "@/components/JournalPrompt";
 import { PromptManager } from "@/components/PromptManager";
 import { useServiceStatus } from "@/hooks/useServiceStatus";
@@ -115,8 +116,13 @@ export default function TalkToMyself() {
   const [actualTTSService, setActualTTSService] = useState<string>("browser");
   // Identity: a silent anonymous session, with an optional email and password.
   const { userId, email: accountEmail, accountsAvailable, authHeaders, signUp, signIn, signOut } = useAccount();
-  const [showSignIn, setShowSignIn] = useState(false);
-  const [showAccountForm, setShowAccountForm] = useState(false);
+  // The sign-in / create-account form, shown over whatever screen is open.
+  const [accountForm, setAccountForm] = useState<"signin" | "signup" | null>(null);
+
+  const handleSignOut = async () => {
+    await signOut();
+    toast({ title: "Signed out", description: "Your reflections stay in your account. This browser now starts fresh." });
+  };
 
   // Sessions state management - reverted from useSessions hook for simplicity
   const [sessions, setSessions] = useState<SessionData[]>([]);
@@ -455,7 +461,13 @@ export default function TalkToMyself() {
       // Keep reflections that exist only on this device (not saved yet).
       fetchReflections(userId).then((rows: SessionData[]) => setSessions((prev) => {
         const saved = new Set(rows.map((row) => row.id));
-        return [...prev.filter((session) => !saved.has(session.id)), ...rows];
+        // The recording itself is never stored on the server. Keep the copy in
+        // memory, so Clone Voice still works after signing up or signing in.
+        const audio = new Map(prev.filter((session) => session.audioBlob).map((session) => [session.id, session.audioBlob]));
+        return [
+          ...prev.filter((session) => !saved.has(session.id)),
+          ...rows.map((row) => audio.has(row.id) ? { ...row, audioBlob: audio.get(row.id) } : row),
+        ];
       }));
     }
   }, [userId]);
@@ -1799,11 +1811,7 @@ export default function TalkToMyself() {
   const handleVoiceClone = async () => {
     // Validate that we have audio to work with
     if (!currentSession?.audioBlob) {
-      toast({
-        title: "No audio available",
-        description: "Please record a reflection first to clone your voice.",
-        variant: "destructive",
-      });
+      setVoiceCloneError("Voice cloning needs the recording itself, and recordings are not kept once the page is reloaded. Record a new reflection, then choose Clone Voice.");
       return;
     }
 
@@ -2291,8 +2299,34 @@ export default function TalkToMyself() {
           isRecording={isRecording}
           isProcessing={isProcessing}
           sessionsCount={sessions.length}
-          serviceStatus={serviceStatus}
+          account={accountsAvailable ? {
+            email: accountEmail,
+            onSignIn: () => setAccountForm("signin"),
+            onCreate: () => setAccountForm("signup"),
+            onSignOut: handleSignOut,
+          } : undefined}
         />
+
+        <Dialog open={accountForm !== null} onOpenChange={(open) => { if (!open) setAccountForm(null); }}>
+          <DialogContent className="max-w-2xl border-0 bg-transparent p-0 shadow-none">
+            <DialogTitle className="sr-only">{accountForm === "signup" ? "Create an account" : "Sign in"}</DialogTitle>
+            {accountForm && (
+              <AccountPanel
+                key={accountForm}
+                initialMode={accountForm}
+                onSignUp={signUp}
+                onSignIn={signIn}
+                onDone={(mode) => {
+                  setAccountForm(null);
+                  toast(mode === "signup"
+                    ? { title: "Account created", description: "You can now sign in on another device to see these reflections." }
+                    : { title: "Signed in", description: "Your reflections have been loaded." });
+                }}
+                onDismiss={() => setAccountForm(null)}
+              />
+            )}
+          </DialogContent>
+        </Dialog>
 
         {/* Error Warnings */}
         {speechRecognitionError && (
@@ -2577,29 +2611,12 @@ export default function TalkToMyself() {
               </Card>
               {/* Returning users on a new device: a quiet way in. Never required. */}
               {accountsAvailable && !accountEmail && !isRecording && !isProcessing && (
-                showSignIn ? (
-                  <div className="mx-auto max-w-2xl">
-                    <AccountPanel
-                      initialMode="signin"
-                      onSignUp={signUp}
-                      onSignIn={signIn}
-                      onDone={(mode) => {
-                        setShowSignIn(false);
-                        toast(mode === "signin"
-                          ? { title: "Signed in", description: "Your history has been loaded." }
-                          : { title: "Email and password saved", description: "You can now sign in on another device to see this history." });
-                      }}
-                      onDismiss={() => setShowSignIn(false)}
-                    />
-                  </div>
-                ) : (
-                  <p className="text-center text-sm text-gray-500">
-                    Been here before on another device?{" "}
-                    <button type="button" className="text-purple-700 underline decoration-dotted hover:text-purple-900" onClick={() => setShowSignIn(true)}>
-                      Sign in to see your reflections
-                    </button>
-                  </p>
-                )
+                <p className="text-center text-sm text-gray-500">
+                  Been here before on another device?{" "}
+                  <button type="button" className="text-purple-700 underline decoration-dotted hover:text-purple-900" onClick={() => setAccountForm("signin")}>
+                    Sign in to see your reflections
+                  </button>
+                </p>
               )}
             </TabsContent>
 
@@ -2632,7 +2649,11 @@ export default function TalkToMyself() {
                             role="status"
                           >
                             {!pendingReflections.some((item) => item.id === currentSession.id)
-                              ? "✓ Saved to your reflections"
+                              ? <>✓ Saved to your{" "}
+                                  <button type="button" className="underline hover:text-emerald-900" onClick={() => setActiveTab("history")}>
+                                    reflections
+                                  </button>
+                                </>
                               : savingIds.includes(currentSession.id)
                                 ? "Saving…"
                                 : "Not saved yet. Kept on this device."}
@@ -3285,31 +3306,15 @@ export default function TalkToMyself() {
                             <button
                               type="button"
                               className="font-semibold text-purple-700 underline hover:text-purple-900"
-                              onClick={async () => {
-                                await signOut();
-                                toast({ title: "Signed out", description: "Your reflections stay in your account. This browser now starts fresh." });
-                              }}
+                              onClick={handleSignOut}
                             >
                               Sign out
                             </button>
                           </p>
-                        ) : showAccountForm ? (
-                          <AccountPanel
-                            initialMode="signup"
-                            onSignUp={signUp}
-                            onSignIn={signIn}
-                            onDone={(mode) => {
-                              setShowAccountForm(false);
-                              toast(mode === "signup"
-                                ? { title: "Account created", description: "You can now sign in on another device to see these reflections." }
-                                : { title: "Signed in", description: "Your history has been loaded." });
-                            }}
-                            onDismiss={() => setShowAccountForm(false)}
-                          />
                         ) : (
                           <p>
                             These reflections are kept in this browser.{" "}
-                            <button type="button" className="font-semibold text-purple-700 underline hover:text-purple-900" onClick={() => setShowAccountForm(true)}>
+                            <button type="button" className="font-semibold text-purple-700 underline hover:text-purple-900" onClick={() => setAccountForm("signup")}>
                               Create an account
                             </button>{" "}
                             if you want to keep them across devices.
