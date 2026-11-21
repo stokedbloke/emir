@@ -41,7 +41,22 @@ export interface SessionData {
   recordingDuration?: number
   threadId?: string
   parentSessionId?: string
+  transcription?: TranscriptionInfo
   }
+
+// How a recording was turned into words. "server" is Gemini transcribing the
+// recording, "browser" is the browser's live speech recognition, "backup" is
+// Google Speech-to-Text (used only when both of the others gave nothing).
+export interface TranscriptionInfo {
+  source: "server" | "browser" | "backup"
+  server_ms: number
+  server_words: number
+  browser_words: number
+  // Why the server transcript was not available: too_large, timeout, network, http_<status>.
+  server_problem?: string
+  // The transcript that was not used, kept so the two can be compared.
+  other_transcript?: string
+}
 
 export type GlobalSettings = {
   summary_service: string;

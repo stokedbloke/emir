@@ -40,7 +40,11 @@ import { useToast } from "@/components/ui/use-toast"
 import { v4 as uuidv4 } from 'uuid';
 
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
-import { VocalCharacteristics, EmotionAnalysis, SessionData, GlobalSettings } from "@/types";
+import { VocalCharacteristics, EmotionAnalysis, SessionData, GlobalSettings, TranscriptionInfo } from "@/types";
+
+// Vercel refuses uploads over 4.5 MB, so larger recordings keep the browser transcript.
+const SERVER_TRANSCRIPT_MAX_BYTES = 4 * 1024 * 1024;
+const SERVER_TRANSCRIPT_TIMEOUT_MS = 17000;
 import { API_ENDPOINTS, AUDIO_CONSTANTS, UI_CONSTANTS, DEFAULT_VALUES, SPEECH_TRIGGERS } from "@/constants";
 import { calculateWordCount, formatTime, getDeviceInfo, getBrowserInfo, playChime } from "@/utils";
 import { LoadingStates } from "@/components/LoadingStates";
@@ -101,6 +105,9 @@ export default function TalkToMyself() {
   const fullRecognitionTranscriptRef = useRef("");
   // Words heard in the current phrase that the browser has not confirmed yet.
   const pendingRecognitionRef = useRef("");
+  // How the latest recording was transcribed, saved with the reflection so the
+  // server and browser transcripts can be compared.
+  const transcriptionInfoRef = useRef<TranscriptionInfo | null>(null);
   const [actualTTSService, setActualTTSService] = useState<string>("browser");
   // Identity: a silent anonymous session, with an optional email and password.
   const { userId, email: accountEmail, accountsAvailable, authHeaders, signUp, signIn, signOut } = useAccount();
@@ -161,6 +168,7 @@ export default function TalkToMyself() {
           emotions: row.emotions || [],
           vocalCharacteristics: row.vocal || {},
           audioBlob: undefined, // Not stored in DB
+          transcription: deviceInfo.transcription || undefined,
           threadId,
   parentSessionId,
   recordingDuration: (() => {
@@ -253,6 +261,7 @@ export default function TalkToMyself() {
     recordingDuration: reflection.recording_duration || 0,
     threadId: reflection.device_info?.thread_id ? String(reflection.device_info.thread_id) : String(reflection.id),
     parentSessionId: reflection.device_info?.parent_session_id,
+    transcription: reflection.device_info?.transcription,
   });
 
   // Queue the reflection on this device, then save it. It leaves the queue only
@@ -1162,7 +1171,7 @@ export default function TalkToMyself() {
       for (const trigger of triggers) {
         const triggerPattern = new RegExp(`(?:^|\\s)${trigger.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}[.!?,\\s]*$`, "i");
         if (triggerPattern.test(transcript)) {
-          transcript = transcript.replace(triggerPattern, "").trim();
+          transcript = transcript.replace(triggerPattern, "").replace(/[,;:\s]+$/, "").trim();
           break;
         }
       }
@@ -1250,6 +1259,7 @@ export default function TalkToMyself() {
         emotions: [], // Will be populated when background analysis completes
         vocalCharacteristics,
         audioBlob,
+        transcription: transcriptionInfoRef.current || undefined,
         // Store the actual duration from the red bubble timer
         recordingDuration: recordingDuration,
         threadId: recordingThreadContextRef.current?.threadId || crypto.randomUUID(),
@@ -1296,6 +1306,7 @@ export default function TalkToMyself() {
             ...getDeviceInfo(),
             thread_id: newSession.threadId,
             parent_session_id: newSession.parentSessionId,
+            ...(newSession.transcription ? { transcription: newSession.transcription } : {}),
           },
           browser_info: getBrowserInfo(),
           location_info: null, // Could add geolocation if needed
@@ -1354,15 +1365,58 @@ export default function TalkToMyself() {
     }
   }
 
+  // Sends the recording to the server for transcription. Never throws: a
+  // problem is reported so the caller can fall back to the browser transcript.
+  const serverTranscript = async (audioBlob: Blob): Promise<{ transcript: string; ms: number; problem?: string }> => {
+    const started = Date.now();
+    const done = (transcript: string, problem?: string) => ({ transcript, ms: Date.now() - started, problem });
+    if (audioBlob.size > SERVER_TRANSCRIPT_MAX_BYTES) return done("", "too_large");
+    try {
+      const formData = new FormData();
+      formData.append("audio", audioBlob, "recording");
+      formData.append("mimeType", mediaRecorderRef.current?.mimeType || audioBlob.type);
+      const response = await fetch(API_ENDPOINTS.TRANSCRIBE_AUDIO, {
+        method: "POST",
+        body: formData,
+        signal: AbortSignal.timeout(SERVER_TRANSCRIPT_TIMEOUT_MS),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) return done("", `http_${response.status}`);
+      return done(typeof data.transcript === "string" ? data.transcript.trim() : "");
+    } catch (error) {
+      const name = error instanceof Error ? error.name : "";
+      return done("", name === "TimeoutError" || name === "AbortError" ? "timeout" : "network");
+    }
+  };
+
   const transcribeAudio = async (audioBlob: Blob): Promise<string> => {
     const browserTranscript = `${fullRecognitionTranscriptRef.current} ${pendingRecognitionRef.current}`
       .replace(/\s+/g, " ").trim() ||
       ((window as any).lastRecognitionTranscript || "").trim();
 
-    // Browser speech recognition is the primary transcription path. The recorded
-    // blob is only sent to the server when browser recognition produced nothing.
+    // The server transcribes the recording itself. The browser's live speech
+    // recognition is the fallback whenever the server fails, is slow, or returns
+    // much less than the browser heard (it can invent a few words from silence).
+    const browserWords = calculateWordCount(browserTranscript);
+    const server = await serverTranscript(audioBlob);
+    const serverWords = calculateWordCount(server.transcript);
+    const useServer = serverWords > 0 && serverWords >= browserWords * 0.6;
+    transcriptionInfoRef.current = {
+      source: useServer ? "server" : browserTranscript ? "browser" : "backup",
+      server_ms: server.ms,
+      server_words: serverWords,
+      browser_words: browserWords,
+      ...(server.problem ? { server_problem: server.problem } : {}),
+      // The transcript that was not used, kept for comparison.
+      ...(useServer
+        ? (browserTranscript ? { other_transcript: browserTranscript } : {})
+        : (server.transcript ? { other_transcript: server.transcript } : {})),
+    };
+    if (useServer) {
+      setTranscriptionError(null);
+      return server.transcript;
+    }
     if (browserTranscript) {
-      console.log("Using browser speech recognition transcript");
       setTranscriptionError(null);
       return browserTranscript;
     }
@@ -3127,6 +3181,21 @@ export default function TalkToMyself() {
                               <div className="text-gray-500 text-xs mt-2">
                                 <strong>Transcript:</strong> {session.transcript}
                               </div>
+                              {isAdmin && session.transcription && (
+                                <details className="text-xs text-gray-400 mt-1" onClick={(e) => e.stopPropagation()}>
+                                  <summary className="cursor-pointer">
+                                    Admin: transcript from {session.transcription.source === "server" ? "the server" : session.transcription.source === "browser" ? "the browser" : "backup speech-to-text"}
+                                    {" · "}server {(session.transcription.server_ms / 1000).toFixed(1)}s, {session.transcription.server_words} words
+                                    {session.transcription.server_problem ? ` (${session.transcription.server_problem})` : ""}
+                                    {" · "}browser {session.transcription.browser_words} words
+                                  </summary>
+                                  {session.transcription.other_transcript && (
+                                    <p className="mt-1">
+                                      <strong>{session.transcription.source === "server" ? "Browser heard:" : "Server heard:"}</strong> {session.transcription.other_transcript}
+                                    </p>
+                                  )}
+                                </details>
+                              )}
                               <div className="text-gray-700 mt-1">
                                 <strong>Summary:</strong> {session.summary}
                               </div>
@@ -3166,13 +3235,13 @@ export default function TalkToMyself() {
                     </div>
                     {/* Optional account: a quiet line under the reflections, never a prompt */}
                     {accountsAvailable && (
-                      <div className="mt-8 border-t border-gray-100 pt-4 text-xs text-gray-500">
+                      <div className="mt-8 rounded-2xl border border-purple-100 bg-purple-50/50 px-5 py-4 text-sm text-gray-700">
                         {accountEmail ? (
                           <p>
                             Signed in as {accountEmail}.{" "}
                             <button
                               type="button"
-                              className="underline decoration-dotted hover:text-gray-700"
+                              className="font-semibold text-purple-700 underline hover:text-purple-900"
                               onClick={async () => {
                                 await signOut();
                                 toast({ title: "Signed out", description: "Your reflections stay in your account. This browser now starts fresh." });
@@ -3197,7 +3266,7 @@ export default function TalkToMyself() {
                         ) : (
                           <p>
                             These reflections are kept in this browser.{" "}
-                            <button type="button" className="underline decoration-dotted hover:text-gray-700" onClick={() => setShowAccountForm(true)}>
+                            <button type="button" className="font-semibold text-purple-700 underline hover:text-purple-900" onClick={() => setShowAccountForm(true)}>
                               Create an account
                             </button>{" "}
                             if you want to keep them across devices.

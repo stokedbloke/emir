@@ -6,6 +6,7 @@ export const API_ENDPOINTS = {
   GLOBAL_SETTINGS: '/api/global-settings',
   REFLECTION: '/api/reflection',
   TRANSCRIBE: '/api/transcribe',
+  TRANSCRIBE_AUDIO: '/api/transcribe-audio',
   SUMMARIZE: '/api/summarize',
   EMOTIONS: '/api/emotions',
   EMOTIONS_VALENCE: '/api/emotions-valence',
