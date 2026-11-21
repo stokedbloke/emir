@@ -6,12 +6,14 @@ export const API_ENDPOINTS = {
   GLOBAL_SETTINGS: '/api/global-settings',
   REFLECTION: '/api/reflection',
   TRANSCRIBE: '/api/transcribe',
+  TRANSCRIBE_AUDIO: '/api/transcribe-audio',
   SUMMARIZE: '/api/summarize',
   EMOTIONS: '/api/emotions',
   EMOTIONS_VALENCE: '/api/emotions-valence',
   VOICE_ELEVENLABS: '/api/voice/elevenlabs',
   VOICE_ELEVENLABS_VOICES: '/api/voice/elevenlabs/voices',
   VOICE_CLONE: '/api/voice-clone',
+  VOICE_CLONE_MINE: '/api/voice-clone/mine',
   VOICE_CLONE_IMPROVE: '/api/voice-clone/improve',
   VOICE_CLONE_DELETE: '/api/voice-clone/delete'
 } as const;

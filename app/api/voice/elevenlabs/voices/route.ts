@@ -1,35 +1,47 @@
-// API Route: Fetch available voices from ElevenLabs API
-// Receives a GET request and returns a list of voices (id, name) for use in TTS.
+// API Route: Fetch the shared ElevenLabs voices available to every user.
+// Receives a GET request and returns a list of voices for use in TTS.
 // Environment variables used (private, server-side only):
 //   ELEVENLABS_API_KEY
 //
-// Returns: { voices: Array<{ voice_id: string, name: string }> } on success, or { voices: [] } on failure.
+// Only the admin (x-admin-secret header) gets the account's voice list. Visitors
+// get an empty list: they can use the stock voice and their own clone, whose ID
+// is kept in their browser, so there is nothing to list for them.
 //
-export async function GET() {
+// Returns: { voices: Array<{ voice_id: string, name: string, category: string }> } on success, or { voices: [] } on failure.
+//
+import { isAdminRequest, type ElevenLabsVoice } from '@/lib/voice-ownership';
+
+export async function GET(request: Request) {
+  if (!isAdminRequest(request)) {
+    return Response.json({ voices: [] })
+  }
+
   try {
-    // Use ElevenLabs API key (must be set in env)
     const elevenlabsApiKey = process.env.ELEVENLABS_API_KEY
     if (!elevenlabsApiKey) {
-      // Return empty list if API key is missing
       return Response.json({ voices: [] })
     }
 
-    // Fetch voices from ElevenLabs API
     const response = await fetch("https://api.elevenlabs.io/v1/voices", {
-      headers: { "xi-api-key": elevenlabsApiKey }
+      headers: { "xi-api-key": elevenlabsApiKey },
+      cache: "no-store",
     })
 
     if (!response.ok) {
-      // Log and return empty list on error
       throw new Error("Failed to fetch ElevenLabs voices")
     }
 
-    // Return list of voices
     const data = await response.json()
-    return Response.json({ voices: data.voices || [] })
+    const voices = ((data.voices || []) as ElevenLabsVoice[])
+      .map((voice) => ({
+        voice_id: voice.voice_id,
+        name: voice.name || "Unnamed voice",
+        category: voice.category || "",
+      }))
+
+    return Response.json({ voices })
   } catch (error) {
-    // Catch-all error handler
     console.error("ElevenLabs voices fetch error:", error)
     return Response.json({ voices: [] })
   }
-} 
+}

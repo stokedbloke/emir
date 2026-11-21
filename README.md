@@ -97,10 +97,12 @@ Below are all environment variables required for this project, with their purpos
 | OPENAI_API_KEY                 | Private       | OpenAI API key for LLM summarization (server-side only)      |
 | ANTHROPIC_API_KEY              | Private       | Anthropic Claude API key for LLM summarization (optional)    |
 | GOOGLE_API_KEY                 | Private       | Google API key for Gemini, Speech-to-Text, TTS (server-side) |
+| GOOGLE_API_KEY_2               | Private       | Optional. When set, Gemini (summaries, emotions) uses this key instead of GOOGLE_API_KEY |
 | HUGGINGFACE_API_KEY            | Private       | HuggingFace API key for emotion analysis (server-side)       |
 | ELEVENLABS_API_KEY             | Private       | ElevenLabs API key for TTS (server-side)                     |
 | HUME_API_KEY                   | Private       | Hume.ai API key for TTS (server-side, optional)              |
-| NEXT_PUBLIC_ADMIN_SECRET       | Public        | Optional: Admin secret for browser admin features            |
+| CRON_SECRET                    | Private       | Optional. When set, only Vercel Cron can call /api/keep-alive |
+| ADMIN_SECRET                   | Private       | Optional: Admin secret, verified server-side. Open the app with `?admin=<secret>` to unlock admin tools |
 
 **Public variables** (those prefixed with `NEXT_PUBLIC_`) are exposed to the browser and must not contain sensitive information. All other variables are private and only available to server-side code (API routes, server functions).
 

@@ -8,17 +8,20 @@ interface AppHeaderProps {
   isRecording: boolean;
   isProcessing: boolean;
   sessionsCount: number;
-  serviceStatus: {
-    google: boolean;
-    huggingface: boolean;
+  // Absent when accounts are not available; then no account controls are shown.
+  account?: {
+    email: string | null;
+    onSignIn: () => void;
+    onCreate: () => void;
+    onSignOut: () => void;
   };
 }
 
 export const AppHeader = ({ 
   isRecording, 
   isProcessing, 
-  sessionsCount, 
-  serviceStatus 
+  sessionsCount,
+  account,
 }: AppHeaderProps) => {
   return (
     <div className="relative bg-white/60 backdrop-blur-xl border-b border-white/30 sticky top-0 z-50">
@@ -51,16 +54,27 @@ export const AppHeader = ({
                 {sessionsCount} reflection{sessionsCount !== 1 ? "s" : ""}
               </Badge>
             )}
-            {serviceStatus.google && (
-              <Badge variant="secondary" className="bg-green-100 text-green-700 border-green-200">
-                Google AI Connected
-              </Badge>
-            )}
-            {serviceStatus.huggingface && (
-              <Badge variant="secondary" className="bg-blue-100 text-blue-700 border-blue-200">
-                HuggingFace Connected
-              </Badge>
-            )}
+            {account && (account.email ? (
+              <div className="flex items-center space-x-3 text-sm text-gray-600">
+                <span className="hidden max-w-[14rem] truncate md:inline" title={account.email}>{account.email}</span>
+                <button type="button" onClick={account.onSignOut} className="font-medium text-purple-700 underline hover:text-purple-900">
+                  Sign out
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center space-x-3 text-sm">
+                <button type="button" onClick={account.onCreate} className="hidden font-medium text-purple-700 underline hover:text-purple-900 sm:inline">
+                  Create account
+                </button>
+                <button
+                  type="button"
+                  onClick={account.onSignIn}
+                  className="rounded-xl border border-purple-200 bg-white/80 px-4 py-2 font-semibold text-purple-700 shadow-sm hover:bg-purple-50"
+                >
+                  Sign in
+                </button>
+              </div>
+            ))}
           </div>
         </div>
       </div>

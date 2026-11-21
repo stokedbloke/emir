@@ -3,7 +3,7 @@
 
 import { useState, useEffect } from 'react';
 import { GlobalSettings } from '@/types';
-import { API_ENDPOINTS } from '@/constants';
+import { API_ENDPOINTS, DEFAULT_VALUES } from '@/constants';
 
 export const useSettings = () => {
   const [globalSettings, setGlobalSettings] = useState<GlobalSettings | null>({
@@ -72,7 +72,10 @@ export const useSettings = () => {
   const handleGlobalSettingsChange = (updates: Record<string, any>) => {
     fetch(API_ENDPOINTS.GLOBAL_SETTINGS, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-admin-secret': sessionStorage.getItem(DEFAULT_VALUES.ADMIN_SECRET_KEY) || ''
+      },
       body: JSON.stringify(updates)
     })
     .then(res => res.json())

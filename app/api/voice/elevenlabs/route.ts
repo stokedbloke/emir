@@ -1,34 +1,40 @@
 // API Route: Generate speech audio from text using ElevenLabs Text-to-Speech API
-// Receives a POST request with { text, voiceId } and returns audio (audio/mpeg).
+// Receives a POST request with { text, voiceId, userId } and returns audio (audio/mpeg).
 // Environment variables used (private, server-side only):
 //   ELEVENLABS_API_KEY
 //
+// Visitors may only use the shared stock voice or a clone made for them (userId
+// must be the clone's owner). The admin (x-admin-secret header) may use any voice.
+//
 // Returns: audio/mpeg stream on success, or { error: ... } on failure.
 //
+import { canUseVoice, isAdminRequest } from '@/lib/voice-ownership';
+import { resolveUserId } from '@/lib/account';
+
 export async function POST(request: Request) {
   try {
-    // Parse text and voiceId from request body
-    const { text, voiceId = "SAz9YHcvj6GT2YYXdXww" } = await request.json()
-    
+    const body = await request.json()
+    const { text, voiceId = "SAz9YHcvj6GT2YYXdXww" } = body
+    // Without a verified identity the stock voice still plays; only clones need one.
+    const resolved = await resolveUserId(request, body.userId)
+    const userId = resolved.ok ? resolved.userId : undefined
+
     if (typeof text !== "string" || !text.trim() || typeof voiceId !== "string" || !voiceId.trim()) {
       return Response.json({ error: "Text and a valid voiceId are required" }, { status: 400 })
     }
 
-    console.log('[v0] ElevenLabs request payload:', { textLength: text.length, voiceId });
-    if (!text.trim()) {
-      return Response.json({ error: "Text is required" }, { status: 400 })
-    }
-
-    // Use ElevenLabs TTS API (requires ELEVENLABS_API_KEY)
     const elevenlabsApiKey = process.env.ELEVENLABS_API_KEY;
-    console.log("ELEVENLABS_API_KEY present:", !!elevenlabsApiKey);
     if (!elevenlabsApiKey) {
       console.error("ElevenLabs API key missing!");
       return Response.json({ error: "ElevenLabs API key not configured" }, { status: 500 })
     }
 
-    // Call ElevenLabs API
-    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+    const allowed = await canUseVoice(voiceId, userId, elevenlabsApiKey, isAdminRequest(request));
+    if (!allowed) {
+      return Response.json({ error: "This voice is not available to you" }, { status: 403 })
+    }
+
+    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}`, {
       method: "POST",
       headers: {
         Accept: "audio/mpeg",
@@ -45,16 +51,12 @@ export async function POST(request: Request) {
       }),
     })
 
-    console.log('ElevenLabs API response status:', response.status);
-    
     if (!response.ok) {
-      // Log and return error if ElevenLabs API fails
       const errorText = await response.text().catch(() => 'Unknown error');
       console.error('ElevenLabs API error response:', errorText);
       throw new Error(`ElevenLabs API failed: ${response.status} - ${errorText}`)
     }
 
-    // Return audio buffer as audio/mpeg
     const audioBuffer = await response.arrayBuffer()
     return new Response(audioBuffer, {
       headers: {
@@ -62,7 +64,6 @@ export async function POST(request: Request) {
       },
     })
   } catch (err) {
-    // Catch-all error handler
     console.warn("Falling back to browser TTS: ElevenLabs TTS error:", err);
     return Response.json({ error: "Failed to generate speech" }, { status: 500 });
   }

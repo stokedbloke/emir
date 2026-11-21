@@ -1,12 +1,27 @@
 // Extracted type definitions from app/page.tsx
 // Generated during refactoring - do not edit manually
 
+// Delivery stats measured from the recording. tone, pitch and volume hold a
+// short label; the numbers they are derived from sit beside them. Reflections
+// saved before the numbers existed carry only the old estimated labels, which
+// are not shown.
 export interface VocalCharacteristics {
-  tone: string
-  pace: string
-  pitch: string
-  volume: string
-  confidence: number
+  pace?: string
+  wordsPerMinute?: number
+  // Share of the recording (0-1) spent in pauses of half a second or longer.
+  pauseRatio?: number
+  longestPauseSeconds?: number
+  tone?: string
+  // Zero crossings per second while speaking: a rough stand-in for brightness.
+  brightnessHz?: number
+  pitch?: string
+  // Typical (median) voice pitch and how far it moves, in semitones.
+  pitchHz?: number
+  pitchVariationSemitones?: number
+  volume?: string
+  // Average speaking level relative to the loudest the recording format allows (0 dB).
+  levelDb?: number
+  confidence?: number
 }
 
 export interface EmotionAnalysis {
@@ -26,7 +41,22 @@ export interface SessionData {
   recordingDuration?: number
   threadId?: string
   parentSessionId?: string
+  transcription?: TranscriptionInfo
   }
+
+// How a recording was turned into words. "server" is Gemini transcribing the
+// recording, "browser" is the browser's live speech recognition, "backup" is
+// Google Speech-to-Text (used only when both of the others gave nothing).
+export interface TranscriptionInfo {
+  source: "server" | "browser" | "backup"
+  server_ms: number
+  server_words: number
+  browser_words: number
+  // Why the server transcript was not available: too_large, timeout, network, http_<status>.
+  server_problem?: string
+  // The transcript that was not used, kept so the two can be compared.
+  other_transcript?: string
+}
 
 export type GlobalSettings = {
   summary_service: string;
