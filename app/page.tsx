@@ -43,6 +43,7 @@ import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "@/comp
 import { VocalCharacteristics, EmotionAnalysis, SessionData, GlobalSettings, TranscriptionInfo } from "@/types";
 
 // Vercel refuses uploads over 4.5 MB, so larger recordings keep the browser transcript.
+const PROCESSING_MS_KEY = "em-processing-ms";
 const SERVER_TRANSCRIPT_MAX_BYTES = 4 * 1024 * 1024;
 // How long to wait for the server transcript before using the browser's: a
 // base wait plus a little per second of recording, up to a ceiling.
@@ -325,6 +326,30 @@ export default function TalkToMyself() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingStage, setProcessingStage] = useState("");
   const [progress, setProgress] = useState(0);
+  const [processingSecondsLeft, setProcessingSecondsLeft] = useState<number | null>(null);
+  const processingStartedRef = useRef(0);
+  const appliedVoiceRef = useRef<string | null>(null);
+
+  // While a reflection is being processed, move the bar steadily and say
+  // roughly how long is left, going by how long the last one took here.
+  useEffect(() => {
+    if (!isProcessing) { setProcessingSecondsLeft(null); return; }
+    const started = Date.now();
+    processingStartedRef.current = started;
+    const last = Number(localStorage.getItem(PROCESSING_MS_KEY));
+    const estimate = Math.min(30000, Math.max(4000, last > 0 ? last : 10000));
+    const tick = () => {
+      const elapsed = Date.now() - started;
+      // Reaches about 85% at the estimate and keeps creeping after it.
+      const shown = 95 * (1 - Math.exp(-elapsed / (estimate / 2)));
+      setProgress((current) => (current >= 100 ? current : Math.max(current, shown)));
+      setProcessingSecondsLeft(Math.ceil((estimate - elapsed) / 1000));
+    };
+    setProgress(0);
+    tick();
+    const timer = setInterval(tick, 250);
+    return () => clearInterval(timer);
+  }, [isProcessing]);
   const [processingError, setProcessingError] = useState<string | null>(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isAudioReady, setIsAudioReady] = useState(false);
@@ -1187,7 +1212,6 @@ export default function TalkToMyself() {
 
     try {
       setProcessingStage("Transcribing your audio...")
-      setProgress(25)
 
       console.log("Processing audio chunks:", audioChunksRef.current.length)
       console.log("Audio chunks sizes:", audioChunksRef.current.map(chunk => chunk.size))
@@ -1232,7 +1256,6 @@ export default function TalkToMyself() {
       }
 
       setProcessingStage("Generating your summary...")
-      setProgress(50)
 
       // Process only essential analysis in parallel for immediate user experience
       // Move non-essential analysis (emotions, vocal characteristics) to background
@@ -1296,6 +1319,9 @@ export default function TalkToMyself() {
 
       setProcessingStage("Ready!")
       setProgress(100)
+      if (processingStartedRef.current) {
+        localStorage.setItem(PROCESSING_MS_KEY, String(Date.now() - processingStartedRef.current));
+      }
 
       // Use ONLY the red bubble timer - store the duration directly
       const recordingDuration = currentRecordingTimeRef.current;
@@ -1734,7 +1760,12 @@ export default function TalkToMyself() {
     if (!userId) return;
     const saved = localStorage.getItem(`em-elevenlabs-voice-${userId}`);
     const ownClone = hasVoiceClone && userVoiceCloneId ? userVoiceCloneId : "";
-    setSelectedElevenLabsVoice(saved !== null ? saved : ownClone);
+    const voice = saved !== null ? saved : ownClone;
+    // A summary already read aloud in another voice (for example the default
+    // voice, before signing in brought the clone along) must be made again.
+    if (appliedVoiceRef.current !== null && appliedVoiceRef.current !== voice) discardGeneratedAudio();
+    appliedVoiceRef.current = voice;
+    setSelectedElevenLabsVoice(voice);
   }, [userId, userVoiceCloneId, hasVoiceClone]);
 
   // Audio already generated for a summary is kept for replay. Drop it when the
@@ -2562,6 +2593,13 @@ export default function TalkToMyself() {
                           <span className="font-medium">{processingStage}</span>
                         </div>
                         <Progress value={progress} className="h-3 bg-white/50 rounded-full overflow-hidden" />
+                        {processingSecondsLeft !== null && progress < 100 && (
+                          <p className="text-center text-sm text-gray-500" aria-live="polite">
+                            {processingSecondsLeft > 1
+                              ? `About ${processingSecondsLeft} seconds left`
+                              : "Almost there, taking a little longer than usual..."}
+                          </p>
+                        )}
                       </div>
                     )}
 
