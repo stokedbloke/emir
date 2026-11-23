@@ -1,3 +1,9 @@
+// API Route: emotions heard in the voice (Valence AI discrete API).
+// Receives { audioBlob } as a base64 data URL of a WAV clip: mono, 4.5 to 15
+// seconds. Returns { emotions } strongest first (top 3, or ?limit=N).
+// Environment variables used (private, server-side only):
+//   VALENCE_API_KEY
+//   VALENCE_API_BASE_URL (optional, defaults to https://api.getvalenceai.com)
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function POST(request: NextRequest) {
@@ -36,7 +42,10 @@ export async function POST(request: NextRequest) {
     const formData = new FormData();
     formData.append('file', blob, `audio.${mimeType.split('/')[1]}`);
 
-    const valenceUrl = 'https://xc8n2bo4f0.execute-api.us-west-2.amazonaws.com/emotionprediction?model=7emotions';
+    // Valence's current address. The earlier AWS address this route used now
+    // answers 503 for every request.
+    const baseUrl = (process.env.VALENCE_API_BASE_URL || 'https://api.getvalenceai.com').replace(/\/+$/, '');
+    const valenceUrl = `${baseUrl}/v1/discrete/emotion?model=7emotions`;
 
     const response = await fetch(valenceUrl, {
       method: 'POST',
@@ -44,6 +53,7 @@ export async function POST(request: NextRequest) {
         'x-api-key': process.env.VALENCE_API_KEY || '',
       },
       body: formData,
+      signal: AbortSignal.timeout(20000),
     });
 
     if (!response.ok) {
@@ -56,10 +66,6 @@ export async function POST(request: NextRequest) {
     }
 
     const result = await response.json();
-    console.log('Valence API full response:', JSON.stringify(result, null, 2));
-    console.log('Response status:', response.status);
-    console.log('Has all_predictions?', !!result.all_predictions);
-    console.log('Has error?', !!result.error);
 
     if (result.error) {
       console.error('Valence API returned error:', result.error);
@@ -96,7 +102,6 @@ export async function POST(request: NextRequest) {
         // [CHANGE: 2025-12-14] Usage of limit parameter
         .slice(0, limit);
 
-      console.log(`Returning top ${limit} emotions:`, emotions);
       return NextResponse.json({ emotions });
     } else {
       console.warn('Valence response missing all_predictions field');

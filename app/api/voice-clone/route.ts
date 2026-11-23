@@ -3,87 +3,69 @@
 // Environment variables used (private, server-side only):
 //   ELEVENLABS_API_KEY
 //
+// The clone is stored under an opaque name derived from the user ID, so the
+// ElevenLabs voice list never contains a user ID.
+//
 // Returns: { voiceId: string, success: boolean } on success, or { error: string } on failure.
 //
+import { cloneNameFor, deleteVoice, ownClones } from '@/lib/voice-ownership';
+import { resolveUserId } from '@/lib/account';
+
 export async function POST(request: Request) {
   try {
     const formData = await request.formData();
     const audioBlob = formData.get('audio') as Blob;
-    const userId = formData.get('userId') as string;
-    
-    console.log('API received formData keys:', Array.from(formData.keys()));
-    console.log('API received audioBlob:', {
-      exists: !!audioBlob,
-      size: audioBlob?.size,
-      type: audioBlob?.type,
-      constructor: audioBlob?.constructor?.name
-    });
-    console.log('API received userId:', userId);
-    
+    const resolved = await resolveUserId(request, formData.get('userId'));
+    if (!resolved.ok) return Response.json({ error: resolved.error }, { status: resolved.status });
+    const userId = resolved.userId;
+
     if (!audioBlob || !userId || typeof (audioBlob as Blob).arrayBuffer !== 'function' || audioBlob.size === 0) {
       return Response.json({ error: "A non-empty audio file and userId are required" }, { status: 400 });
     }
 
-    if (!process.env.ELEVENLABS_API_KEY) {
+    const apiKey = process.env.ELEVENLABS_API_KEY;
+    if (!apiKey) {
       return Response.json({ error: "ElevenLabs API key not configured" }, { status: 500 });
     }
 
-    // Convert audio to base64 for ElevenLabs API
-    // ElevenLabs expects audio files to be sent as base64 strings
-    const arrayBuffer = await audioBlob.arrayBuffer();
-    const base64Audio = Buffer.from(arrayBuffer).toString('base64');
-    
-    console.log('Audio blob size:', audioBlob.size, 'bytes');
-    console.log('Audio blob type:', audioBlob.type);
-    console.log('Base64 audio length:', base64Audio.length);
-    
-    // Try multipart/form-data approach
     const elevenLabsFormData = new FormData();
-    elevenLabsFormData.append('name', `user_${userId}_${Date.now()}`);
-    elevenLabsFormData.append('description', `Voice clone for user ${userId}`);
-    elevenLabsFormData.append('labels', JSON.stringify({
-      "accent": "neutral",
-      "description": "User voice clone",
-      "category": "generated"
-    }));
-    
-    // Convert base64 back to binary properly using Buffer
-    const audioBuffer = Buffer.from(base64Audio, 'base64');
-    const audioBlobForFormData = new Blob([audioBuffer], { type: 'audio/webm;codecs=opus' });
-    elevenLabsFormData.append('files', audioBlobForFormData, 'recording.webm');
-    
-    console.log('Sending to ElevenLabs (multipart):', {
-      url: 'https://api.elevenlabs.io/v1/voices/add',
-      method: 'POST',
-      headers: {
-        'xi-api-key': process.env.ELEVENLABS_API_KEY ? 'PRESENT' : 'MISSING',
-        'Content-Type': 'multipart/form-data',
-      },
-      formDataKeys: Array.from(elevenLabsFormData.keys())
-    });
-    
-    // Call ElevenLabs instant voice cloning API
+    elevenLabsFormData.append('name', cloneNameFor(userId));
+    elevenLabsFormData.append('description', 'VocalMirror user voice clone');
+    elevenLabsFormData.append('files', new Blob([await audioBlob.arrayBuffer()], { type: audioBlob.type || 'audio/webm;codecs=opus' }), 'recording.webm');
+
+    // Don't set Content-Type for FormData - fetch sets the multipart boundary itself
     const response = await fetch('https://api.elevenlabs.io/v1/voices/add', {
       method: 'POST',
-      headers: {
-        'xi-api-key': process.env.ELEVENLABS_API_KEY!,
-        // Don't set Content-Type for FormData - let fetch set it automatically
-      },
+      headers: { 'xi-api-key': apiKey },
       body: elevenLabsFormData,
     });
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => 'Unknown error');
       console.error('ElevenLabs voice clone API error:', errorText);
+      // Tell the app when the cause is a plan limit, so it can say so plainly:
+      // voice_limit_reached (every voice slot is in use) or
+      // voice_add_edit_limit_reached (this month's clone changes are used up).
+      const code = /"status"\s*:\s*"(voice_limit_reached|voice_add_edit_limit_reached)"/.exec(errorText)?.[1];
+      if (code) return Response.json({ error: 'Failed to create voice clone', code }, { status: 409 });
       throw new Error(`ElevenLabs API failed: ${response.status} - ${errorText}`);
     }
 
     const data = await response.json();
-    console.log('Voice clone created successfully:', data);
-    
-    return Response.json({ 
+
+    // One clone per person: remove any earlier clone this browser did not know
+    // about (for example one made on another device), so it does not hold a slot.
+    try {
+      for (const voice of await ownClones(userId, apiKey)) {
+        if (voice.voice_id !== data.voice_id) await deleteVoice(voice.voice_id, apiKey);
+      }
+    } catch (cleanupError) {
+      console.warn('Could not remove an earlier clone:', cleanupError instanceof Error ? cleanupError.message : cleanupError);
+    }
+
+    return Response.json({
       voiceId: data.voice_id,
-      success: true 
+      success: true
     });
   } catch (error) {
     console.error('Voice clone error:', error);
