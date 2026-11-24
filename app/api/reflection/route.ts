@@ -19,6 +19,43 @@ function getSupabase() {
   return createClient(url, key);
 }
 
+const MAX_SUMMARY_CHARS = 6000;
+
+// PATCH { id, userId, summary }: replaces the summary of one of the caller's
+// reflections. Used to synthesize a reflection later when the summary service
+// was unavailable at the time it was recorded. Nothing else can be changed.
+export async function PATCH(request: Request) {
+  try {
+    const body = await request.json().catch(() => ({}));
+    const resolved = await resolveUserId(request, body.userId);
+    if (!resolved.ok) return Response.json({ error: resolved.error }, { status: resolved.status });
+
+    const id = typeof body.id === 'string' ? body.id : '';
+    const summary = typeof body.summary === 'string' ? body.summary.trim() : '';
+    if (!id) return Response.json({ error: 'A reflection id is required' }, { status: 400 });
+    if (!summary || summary.length > MAX_SUMMARY_CHARS) {
+      return Response.json({ error: 'A summary is required' }, { status: 400 });
+    }
+
+    const { data, error } = await getSupabase()
+      .from('reflections')
+      .update({ summary })
+      .eq('id', id)
+      .eq('user_id', resolved.userId)
+      .select('id');
+    if (error) {
+      console.error('Supabase summary update error:', error);
+      return Response.json({ error: error.message }, { status: 500 });
+    }
+    // The same answer whether it does not exist or belongs to someone else.
+    if (!data || data.length === 0) return Response.json({ error: 'Reflection not found' }, { status: 404 });
+    return Response.json({ success: true });
+  } catch (error) {
+    console.error('API Error:', error);
+    return Response.json({ error: 'Could not update the reflection' }, { status: 500 });
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const supabase = getSupabase();

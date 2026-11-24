@@ -6,7 +6,14 @@
 // - Renders page content via {children}
 // - Theme classes/styles are managed by ThemeProvider to avoid hydration mismatches
 import "./globals.css"
+import type { Metadata } from "next"
 import { ThemeProvider } from "@/components/theme-provider"
+
+// The browser tab icon is app/icon.svg, which Next.js links automatically.
+export const metadata: Metadata = {
+  title: "VocalMirror",
+  description: "A private, hands-free voice journal that listens and reflects your words back without judgment.",
+}
 
 export default function RootLayout({
   children,
@@ -15,10 +22,6 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <head>
-        <link rel="icon" href="/favicon.ico" sizes="any" />
-        {/* You can also use favicon.png if preferred: <link rel="icon" type="image/png" href="/favicon.png" /> */}
-      </head>
       <body>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
           {children}

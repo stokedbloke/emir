@@ -2,7 +2,7 @@
 // Generated during refactoring - do not edit manually
 
 import { Badge } from "@/components/ui/badge";
-import { Heart, Sparkles } from "lucide-react";
+import { VocalMirrorLogo } from "@/components/VocalMirrorLogo";
 
 interface AppHeaderProps {
   isRecording: boolean;
@@ -28,17 +28,10 @@ export const AppHeader = ({
       <div className="max-w-7xl mx-auto px-6 py-6">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-4">
-            <div className="relative">
-              <div className="w-12 h-12 bg-gradient-to-br from-purple-500 via-pink-500 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg">
-                <Heart className="w-6 h-6 text-white" />
-              </div>
-              <div className="absolute -top-1 -right-1 w-4 h-4 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-full flex items-center justify-center">
-                <Sparkles className="w-2 h-2 text-white" />
-              </div>
-            </div>
+            <VocalMirrorLogo className="w-12 h-12 rounded-xl shadow-lg" />
             <div>
               <h1 className="text-2xl font-bold bg-gradient-to-r from-purple-600 to-indigo-600 bg-clip-text text-transparent">
-                Emotional Mirror
+                VocalMirror
               </h1>
               <p className="text-sm text-gray-600">Release your inner monologue</p>
             </div>
