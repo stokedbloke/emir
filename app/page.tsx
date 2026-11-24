@@ -59,6 +59,7 @@ import { AppHeader } from "@/components/AppHeader";
 import { useSettings } from "@/hooks/useSettings";
 import { useAccount } from "@/hooks/useAccount";
 import { AccountPanel, NewPasswordPanel } from "@/components/AccountPanel";
+import { VocalMirrorLogo } from "@/components/VocalMirrorLogo";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { JournalPrompt } from "@/components/JournalPrompt";
 import { PromptManager } from "@/components/PromptManager";
@@ -1530,46 +1531,92 @@ export default function TalkToMyself() {
     }
   }
 
+  // Asks the summary service for a synthesis. Throws when it fails.
+  const requestSummary = async (transcript: string): Promise<string> => {
+    console.log("Generating summary for transcript:", transcript)
+    // Use API (keys are configured on backend)
+    console.log('Generating summary with service:', globalSettings?.summary_service);
+    const response = await fetch(API_ENDPOINTS.SUMMARIZE, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        transcript,
+        service: globalSettings?.summary_service || "gemini",
+      }),
+    })
+    console.log('Summary API response status:', response.status);
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.details || errorData.error || `Summary API failed (${response.status})`);
+    }
+
+    const data = await response.json()
+    const summary = data.summary?.trim() || "";
+
+    // If the summary is empty or looks like a stub, return a better fallback
+    if (
+      !summary ||
+      summary.toLowerCase().startsWith("the themes of") ||
+      summary.toLowerCase().includes("please provide") ||
+      summary.toLowerCase().includes("i need the") ||
+      summary.toLowerCase().includes("original text") ||
+      summary.length < 10 // Too short to be meaningful
+    ) {
+      throw new Error("Gemini returned an unusable summary");
+    }
+
+    return summary;
+  }
+
+  // What a reflection is given when the summary service fails: the person's
+  // own words, so nothing is lost. It can be synthesized later.
+  const transcriptAsSummary = (transcript: string) => `I said, “${transcript.trim()}”`;
+  const isUnsynthesized = (session: SessionData) =>
+    Boolean(session.transcript) && session.summary?.trim() === transcriptAsSummary(session.transcript);
+
+  const [synthesizingId, setSynthesizingId] = useState<string | null>(null);
+
+  // Makes the synthesis for a reflection that never got one.
+  const synthesizeLater = async (session: SessionData) => {
+    if (synthesizingId) return;
+    setSynthesizingId(session.id);
+    try {
+      const summary = await requestSummary(session.transcript);
+      const res = await fetch(API_ENDPOINTS.REFLECTION, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+        body: JSON.stringify({ id: session.id, userId, summary }),
+      });
+      // 404 means it has not been saved yet; the queued copy is corrected below.
+      if (!res.ok && res.status !== 404) throw new Error(`Saving the synthesis failed (${res.status})`);
+      updatePendingReflections(userId, (list) => list.map((item) => item.id === session.id ? { ...item, summary } : item));
+      setSessions((prev) => prev.map((item) => item.id === session.id ? { ...item, summary } : item));
+      if (currentSession?.id === session.id) {
+        // Any audio already made is of the unsynthesized words.
+        discardGeneratedAudio();
+        setCurrentSession((prev) => prev && prev.id === session.id ? { ...prev, summary } : prev);
+      }
+      toast({ title: "Synthesis ready", description: "This reflection now has its synthesis." });
+    } catch (error) {
+      console.error("Synthesizing later failed:", error);
+      toast({
+        title: "Could not synthesize yet",
+        description: "The synthesis service is still busy. Your words are safe; try again in a few minutes.",
+        variant: "destructive",
+      });
+    } finally {
+      setSynthesizingId(null);
+    }
+  };
+
   const generateSummary = async (transcript: string): Promise<string> => {
     try {
-      console.log("Generating summary for transcript:", transcript)
-      // Use API (keys are configured on backend)
-      console.log('Generating summary with service:', globalSettings?.summary_service);
-      const response = await fetch(API_ENDPOINTS.SUMMARIZE, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          transcript,
-          service: globalSettings?.summary_service || "gemini",
-        }),
-      })
-      console.log('Summary API response status:', response.status);
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.details || errorData.error || `Summary API failed (${response.status})`);
-      }
-
-      const data = await response.json()
-      const summary = data.summary?.trim() || "";
-
-      // If the summary is empty or looks like a stub, return a better fallback
-      if (
-        !summary ||
-        summary.toLowerCase().startsWith("the themes of") ||
-        summary.toLowerCase().includes("please provide") ||
-        summary.toLowerCase().includes("i need the") ||
-        summary.toLowerCase().includes("original text") ||
-        summary.length < 10 // Too short to be meaningful
-      ) {
-        throw new Error("Gemini returned an unusable summary");
-      }
-
-      return summary;
+      return await requestSummary(transcript);
     } catch (error) {
       const reason = error instanceof Error ? error.message : "The summary service failed";
       // A provider outage must never discard a successfully transcribed reflection.
       // Preserve the user's words as a readable synthesis and allow the normal save/TTS path to continue.
-      const fallback = `I said, “${transcript.trim()}”`;
+      const fallback = transcriptAsSummary(transcript);
       console.error("Summary generation failed; using transcript fallback:", reason);
       setProcessingStage("Summary service unavailable — preserving your words...");
       return fallback;
@@ -2263,31 +2310,9 @@ export default function TalkToMyself() {
         {passwordResetDialog}
         <Card className="w-full max-w-2xl shadow-2xl border-0 bg-white/90 backdrop-blur-xl">
           <CardHeader className="text-center pb-8 pt-12">
-            <div className="relative mb-8">
-              <div className="relative">
-                {/* Emotional Mirror Brand SVG Logo */}
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" className="w-12 h-12">
-                  <defs>
-                    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                      <stop offset="0%" stopColor="#8e2de2" />
-                      <stop offset="100%" stopColor="#f2994a" />
-                    </linearGradient>
-                  </defs>
-                  <rect width="100" height="100" rx="20" fill="url(#grad)" />
-                  <rect y="50" width="100" height="1.5" fill="#fff" opacity="0.2" />
-                  <path d="M30 20 H70 A5 5 0 0 1 75 25 V45 A5 5 0 0 1 70 50 H50 L45 60 V50 H30 A5 5 0 0 1 25 45 V25 A5 5 0 0 1 30 20 Z" fill="#fff" />
-                  <path d="M30 80 H70 A5 5 0 0 0 75 75 V55 A5 5 0 0 0 70 50 H50 L45 40 V50 H30 A5 5 0 0 0 25 55 V75 A5 5 0 0 0 30 80 Z" fill="#fff" opacity="0.3" />
-                </svg>
-                <div className="absolute -top-1 -right-1 w-4 h-4 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-full flex items-center justify-center">
-                  <Sparkles className="w-2 h-2 text-white" />
-                </div>
-              </div>
-              <div className="absolute -top-2 -right-2 w-8 h-8 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-full flex items-center justify-center">
-                <Sparkles className="w-4 h-4 text-white" />
-              </div>
-            </div>
+            <VocalMirrorLogo className="mx-auto mb-8 h-16 w-16 rounded-2xl shadow-lg" />
             <CardTitle className="text-4xl font-bold bg-gradient-to-r from-purple-600 via-pink-600 to-indigo-600 bg-clip-text text-transparent mb-4">
-              Emotional Mirror
+              VocalMirror
             </CardTitle>
             <CardDescription className="text-xl text-gray-600 max-w-lg mx-auto leading-relaxed">
               A distraction-free space for self-reflection, where talking out your thoughts can help release any grip they may have on you
@@ -2888,12 +2913,21 @@ export default function TalkToMyself() {
                         <div className="absolute -left-6 top-0 w-1 h-full bg-gradient-to-b from-purple-400 to-pink-500 rounded-full"></div>
                         <blockquote className="text-xl text-gray-700 leading-relaxed font-medium italic pl-8">
                           "{currentSession.summary}"
-                          {currentSession.summary?.startsWith("I said:") && (
-                            <span className="text-sm text-gray-400 ml-2" title="Using original transcript as summary">
-                              (original)
-                            </span>
-                          )}
                         </blockquote>
+                        {isUnsynthesized(currentSession) && (
+                          <div className="mt-6 flex flex-wrap items-center gap-3 pl-8 text-sm text-gray-600">
+                            <span>These are your own words: the synthesis service was unavailable.</span>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={synthesizingId !== null || isProcessing}
+                              onClick={() => synthesizeLater(currentSession)}
+                              className="rounded-xl border-purple-300 text-purple-700 hover:bg-purple-50"
+                            >
+                              {synthesizingId === currentSession.id ? "Synthesizing…" : "Synthesize now"}
+                            </Button>
+                          </div>
+                        )}
                       </div>
                       <div className="mt-8 flex flex-col items-center gap-3 border-t border-purple-100 pt-6">
                         <Button
@@ -3334,9 +3368,24 @@ export default function TalkToMyself() {
                                   )}
                                 </details>
                               )}
-                              <div className="text-gray-700 mt-1">
-                                <strong>Summary:</strong> {session.summary}
-                              </div>
+                              {isUnsynthesized(session) ? (
+                                <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-gray-600">
+                                  <span>Not synthesized yet: the synthesis service was unavailable when this was recorded.</span>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={synthesizingId !== null}
+                                    onClick={() => synthesizeLater(session)}
+                                    className="rounded-xl border-purple-300 text-purple-700 hover:bg-purple-50"
+                                  >
+                                    {synthesizingId === session.id ? "Synthesizing…" : "Synthesize now"}
+                                  </Button>
+                                </div>
+                              ) : (
+                                <div className="text-gray-700 mt-1">
+                                  <strong>Summary:</strong> {session.summary}
+                                </div>
+                              )}
                             </div>
                             <div className="flex flex-wrap gap-2 ml-6">
                               {(session.emotions || []).slice(0, 3).map((emotion, emotionIndex) => (
@@ -3511,7 +3560,7 @@ export default function TalkToMyself() {
                     </p>
 
                     <p className="mb-8">
-                      We live in a flood of news, feeds, and opinions. I'm not trying to shut the world out; I'm choosing moments to tune in. Emotional Mirror gives me a protected space to be 100% present with myself, so I can declutter what's already inside; truths, gifts, and realities, and be present in the world with more intention and calm.
+                      We live in a flood of news, feeds, and opinions. I'm not trying to shut the world out; I'm choosing moments to tune in. VocalMirror gives me a protected space to be 100% present with myself, so I can declutter what's already inside; truths, gifts, and realities, and be present in the world with more intention and calm.
                     </p>
                   </div>
 
