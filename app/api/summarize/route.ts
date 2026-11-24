@@ -9,7 +9,14 @@ import { generateText } from "ai"
 import { createOpenAI } from "@ai-sdk/openai"
 import { createAnthropic } from "@ai-sdk/anthropic"
 import { createGoogleGenerativeAI } from "@ai-sdk/google"
-import { geminiApiKey } from '@/lib/gemini-key'
+import { geminiApiKey, withGeminiBackup } from '@/lib/gemini-key'
+
+export const maxDuration = 60;
+
+// A summary normally takes a second or two. If the first model is slower than
+// this, the backup model is asked as well and the first answer is used.
+const BACKUP_AFTER_MS = 4000;
+const TIMEOUT_MS = 30000;
 
 export async function POST(request: Request) {
   console.log('=== SUMMARIZE API CALLED ===');
@@ -50,6 +57,7 @@ Rephrased reflection (FIRST PERSON ONLY):`
     // Select LLM model based on requested service
     console.log("Selecting LLM model for service:", service);
     let model
+    let google: ReturnType<typeof createGoogleGenerativeAI> | null = null
     switch (service) {
       case "claude":
         // Use Anthropic Claude (requires ANTHROPIC_API_KEY)
@@ -70,10 +78,7 @@ Rephrased reflection (FIRST PERSON ONLY):`
           console.error("Google API key not configured");
           return Response.json({ error: "Google API key not configured" }, { status: 500 })
         }
-        const google = createGoogleGenerativeAI({ apiKey: googleApiKey })
-
-        model = google("gemini-3.6-flash")
-        console.log("Using Gemini model: gemini-3.6-flash");
+        google = createGoogleGenerativeAI({ apiKey: googleApiKey })
         break
       default:
         // Use OpenAI (requires OPENAI_API_KEY)
@@ -89,11 +94,18 @@ Rephrased reflection (FIRST PERSON ONLY):`
 
     // Generate summary using the selected LLM
     console.log("Calling generateText...");
-    const { text } = await generateText({
-      model,
-      prompt,
-      temperature: 0.7,
-    })
+    const gemini = google
+    const { text } = gemini
+      ? await withGeminiBackup((name, abortSignal) => generateText({
+          model: gemini(name),
+          prompt,
+          temperature: 0.7,
+          maxRetries: 0,
+          abortSignal,
+          // Rephrasing needs no separate reasoning step, and skipping it is faster.
+          providerOptions: { google: { thinkingConfig: { thinkingBudget: 0 } } },
+        }), { hedgeAfterMs: BACKUP_AFTER_MS, timeoutMs: TIMEOUT_MS })
+      : await generateText({ model: model!, prompt, temperature: 0.7, abortSignal: AbortSignal.timeout(TIMEOUT_MS) })
     console.log("generateText completed");
 
     let summary = text?.trim();
