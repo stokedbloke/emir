@@ -12,7 +12,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { generateObject } from 'ai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { z } from 'zod';
-import { geminiApiKey } from '@/lib/gemini-key';
+import { geminiApiKey, GEMINI_MODELS } from '@/lib/gemini-key';
 
 // Same label set as the earlier HuggingFace model (GoEmotions), so new and old
 // reflections in a user's history use the same vocabulary.
@@ -56,7 +56,8 @@ async function withGemini(text: string, apiKey: string): Promise<Emotion[]> {
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     try {
       const { object } = await generateObject({
-    model: google('gemini-3.6-flash'),
+    // The second attempt uses the backup model, in case the first is overloaded.
+    model: google(GEMINI_MODELS[Math.min(attempt, GEMINI_MODELS.length) - 1]),
     temperature: 0,
     abortSignal: AbortSignal.timeout(ATTEMPT_TIMEOUT_MS),
     maxRetries: 0,

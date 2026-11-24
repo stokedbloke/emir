@@ -19,6 +19,42 @@ const START_TIMEOUT_MS = 8000;
 
 type Result = { ok: true } | { ok: false; error: string };
 
+// The link in a password reset email comes back to the app with this marker.
+const RESET_MARKER = 'reset';
+
+// What the address says about a password reset, read before the Supabase
+// client starts (it removes its own details from the address once it has them).
+function resetLinkState(): 'ready' | 'expired' | null {
+  const hash = window.location.hash;
+  const marked = new URLSearchParams(window.location.search).has(RESET_MARKER);
+  if (/error(_code)?=/.test(hash) && (marked || /otp_expired|access_denied/.test(hash))) return 'expired';
+  if (/type=recovery/.test(hash)) return 'ready';
+  return null;
+}
+
+// The session this browser had before a reset link replaced it, so reflections
+// made here without signing in can follow the person into their account.
+function storedAccessToken(): string | null {
+  try {
+    for (let index = 0; index < localStorage.length; index++) {
+      const key = localStorage.key(index) || '';
+      if (!/^sb-.+-auth-token$/.test(key)) continue;
+      const token = JSON.parse(localStorage.getItem(key) || 'null')?.access_token;
+      if (typeof token === 'string' && token) return token;
+    }
+  } catch {
+    // Unreadable storage: carry on without it.
+  }
+  return null;
+}
+
+function clearResetFromAddress() {
+  const url = new URL(window.location.href);
+  url.searchParams.delete(RESET_MARKER);
+  url.hash = '';
+  window.history.replaceState(null, '', url.pathname + url.search);
+}
+
 const pendingKey = (userId: string) => `em-pending-reflections-${userId}`;
 
 // Unsaved reflections are queued per history ID; carry them over when the ID changes.
@@ -40,6 +76,9 @@ export function useAccount() {
   const [email, setEmail] = useState<string | null>(null);
   // True when this browser has a working session, so account features can be offered.
   const [accountsAvailable, setAccountsAvailable] = useState(false);
+  // Set when the page was opened from a password reset email: "ready" asks
+  // for a new password, "expired" says the link no longer works.
+  const [passwordReset, setPasswordReset] = useState<'ready' | 'expired' | null>(null);
   const started = useRef(false);
 
   const accessToken = useCallback(async (): Promise<string | null> => {
@@ -83,6 +122,11 @@ export function useAccount() {
       setUserId(id);
     };
 
+    // Both must be read before the Supabase client starts and takes the link's
+    // session for its own.
+    const reset = resetLinkState();
+    const tokenBeforeReset = reset === 'ready' ? storedAccessToken() : null;
+
     const supabase = supabaseBrowser();
     if (!supabase) return useBareId();
 
@@ -94,7 +138,15 @@ export function useAccount() {
             const { error } = await supabase.auth.signInAnonymously();
             if (error) return null;
           }
-          return openSession();
+          const opened = await openSession(
+            tokenBeforeReset && tokenBeforeReset !== data.session?.access_token
+              ? { legacyId: null, mergeFromToken: tokenBeforeReset }
+              : {},
+          );
+          // A reset link signs the person in to their account.
+          if (reset === 'expired' || (reset === 'ready' && opened?.email)) setPasswordReset(reset);
+          if (reset) clearResetFromAddress();
+          return opened;
         })(),
         new Promise<null>((resolve) => setTimeout(() => resolve(null), START_TIMEOUT_MS)),
       ]);
@@ -162,6 +214,45 @@ export function useAccount() {
     }
   }, [accessToken, email, openSession, userId]);
 
+  // Emails a link for choosing a new password. The answer is the same whether
+  // or not the email has an account, so the form cannot be used to find out.
+  const requestPasswordReset = useCallback(async (forEmail: string): Promise<Result> => {
+    const supabase = supabaseBrowser();
+    if (!supabase) return { ok: false, error: 'Password reset is not available right now' };
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(forEmail.trim().toLowerCase(), {
+        redirectTo: `${window.location.origin}/?${RESET_MARKER}=1`,
+      });
+      if (error && (error.status === 429 || /rate limit|security purposes/i.test(error.message))) {
+        return { ok: false, error: 'Too many reset emails were asked for. Wait a few minutes and try again.' };
+      }
+      if (error) console.warn('Password reset request failed:', error.message);
+      return { ok: true };
+    } catch {
+      return { ok: false, error: 'Could not reach the server. Try again.' };
+    }
+  }, []);
+
+  // Saves the new password for the account the reset link signed in to.
+  const setNewPassword = useCallback(async (password: string): Promise<Result> => {
+    const supabase = supabaseBrowser();
+    if (!supabase) return { ok: false, error: 'Password reset is not available right now' };
+    try {
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) {
+        if (error.code === 'weak_password') return { ok: false, error: 'Choose a stronger password' };
+        if (error.code === 'same_password') return { ok: false, error: 'Choose a password different from the old one' };
+        return { ok: false, error: 'Could not save the password. Ask for a new reset link and try again.' };
+      }
+      setPasswordReset(null);
+      return { ok: true };
+    } catch {
+      return { ok: false, error: 'Could not reach the server. Try again.' };
+    }
+  }, []);
+
+  const dismissPasswordReset = useCallback(() => setPasswordReset(null), []);
+
   // Signs out and gives this browser a fresh, empty anonymous session.
   const signOut = useCallback(async () => {
     await supabaseBrowser()?.auth.signOut().catch(() => undefined);
@@ -171,5 +262,5 @@ export function useAccount() {
     await start();
   }, [start]);
 
-  return { userId, email, accountsAvailable, authHeaders, signUp, signIn, signOut };
+  return { userId, email, accountsAvailable, authHeaders, signUp, signIn, signOut, requestPasswordReset, passwordReset, setNewPassword, dismissPasswordReset };
 }

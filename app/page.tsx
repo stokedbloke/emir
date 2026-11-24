@@ -14,7 +14,6 @@ import { useState, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Progress } from "@/components/ui/progress"
 import { Badge } from "@/components/ui/badge"
 import {
   Mic,
@@ -43,13 +42,15 @@ import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "@/comp
 import { VocalCharacteristics, EmotionAnalysis, SessionData, GlobalSettings, TranscriptionInfo } from "@/types";
 
 // Vercel refuses uploads over 4.5 MB, so larger recordings keep the browser transcript.
-const PROCESSING_MS_KEY = "em-processing-ms";
 const SERVER_TRANSCRIPT_MAX_BYTES = 4 * 1024 * 1024;
 // How long to wait for the server transcript before using the browser's: a
 // base wait plus a little per second of recording, up to a ceiling.
 const SERVER_TRANSCRIPT_BASE_WAIT_MS = 6000;
 const SERVER_TRANSCRIPT_WAIT_PER_SECOND_MS = 50;
-const SERVER_TRANSCRIPT_MAX_WAIT_MS = 12000;
+const SERVER_TRANSCRIPT_MAX_WAIT_MS = 20000;
+// Speech stays clear at this rate, and about 10 minutes fits under the upload
+// limit. Browsers left to choose use two or three times as much.
+const RECORDING_BITS_PER_SECOND = 48000;
 import { API_ENDPOINTS, AUDIO_CONSTANTS, UI_CONSTANTS, DEFAULT_VALUES, SPEECH_TRIGGERS } from "@/constants";
 import { calculateWordCount, formatTime, getDeviceInfo, getBrowserInfo, playChime } from "@/utils";
 import { LoadingStates } from "@/components/LoadingStates";
@@ -57,7 +58,7 @@ import { BackgroundElements } from "@/components/BackgroundElements";
 import { AppHeader } from "@/components/AppHeader";
 import { useSettings } from "@/hooks/useSettings";
 import { useAccount } from "@/hooks/useAccount";
-import { AccountPanel } from "@/components/AccountPanel";
+import { AccountPanel, NewPasswordPanel } from "@/components/AccountPanel";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { JournalPrompt } from "@/components/JournalPrompt";
 import { PromptManager } from "@/components/PromptManager";
@@ -116,7 +117,7 @@ export default function TalkToMyself() {
   const transcriptionInfoRef = useRef<TranscriptionInfo | null>(null);
   const [actualTTSService, setActualTTSService] = useState<string>("browser");
   // Identity: a silent anonymous session, with an optional email and password.
-  const { userId, email: accountEmail, accountsAvailable, authHeaders, signUp, signIn, signOut } = useAccount();
+  const { userId, email: accountEmail, accountsAvailable, authHeaders, signUp, signIn, signOut, requestPasswordReset, passwordReset, setNewPassword, dismissPasswordReset } = useAccount();
   // The sign-in / create-account form, shown over whatever screen is open.
   const [accountForm, setAccountForm] = useState<"signin" | "signup" | null>(null);
 
@@ -327,7 +328,6 @@ export default function TalkToMyself() {
   const [processingStage, setProcessingStage] = useState("");
   const [progress, setProgress] = useState(0);
   const [processingSecondsLeft, setProcessingSecondsLeft] = useState<number | null>(null);
-  const processingStartedRef = useRef(0);
   const appliedVoiceRef = useRef<string | null>(null);
 
   // While a reflection is being processed, move the bar steadily and say
@@ -335,9 +335,8 @@ export default function TalkToMyself() {
   useEffect(() => {
     if (!isProcessing) { setProcessingSecondsLeft(null); return; }
     const started = Date.now();
-    processingStartedRef.current = started;
-    const last = Number(localStorage.getItem(PROCESSING_MS_KEY));
-    const estimate = Math.min(30000, Math.max(4000, last > 0 ? last : 10000));
+    // Longer recordings take longer to transcribe and summarize.
+    const estimate = Math.min(45000, 8000 + currentRecordingTimeRef.current * 60);
     const tick = () => {
       const elapsed = Date.now() - started;
       // Reaches about 85% at the estimate and keeps creeping after it.
@@ -830,7 +829,7 @@ export default function TalkToMyself() {
     }
     console.log('Creating MediaRecorder with mimeType:', mimeType, 'on mobile:', /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent));
     try {
-      const recorder = new MediaRecorder(streamRef.current, mimeType ? { mimeType } : undefined);
+      const recorder = new MediaRecorder(streamRef.current, { ...(mimeType ? { mimeType } : {}), audioBitsPerSecond: RECORDING_BITS_PER_SECOND });
       mediaRecorderRef.current = recorder
       mediaRecorderRef.current.ondataavailable = (event) => {
         console.log("MediaRecorder ondataavailable:", event.data.size, "bytes")
@@ -1319,9 +1318,6 @@ export default function TalkToMyself() {
 
       setProcessingStage("Ready!")
       setProgress(100)
-      if (processingStartedRef.current) {
-        localStorage.setItem(PROCESSING_MS_KEY, String(Date.now() - processingStartedRef.current));
-      }
 
       // Use ONLY the red bubble timer - store the duration directly
       const recordingDuration = currentRecordingTimeRef.current;
@@ -2216,9 +2212,55 @@ export default function TalkToMyself() {
   if (globalSettingsError && !globalSettings) {
     return <LoadingStates isPreparing={false} isLoadingSettings={false} hasSettingsError={true} globalSettingsError={globalSettingsError} />
   }
+  // Sign in, create an account, or ask for a password reset link.
+  const accountDialog = (
+        <Dialog open={accountForm !== null} onOpenChange={(open) => { if (!open) setAccountForm(null); }}>
+          <DialogContent className="max-w-2xl border-0 bg-transparent p-0 shadow-none">
+            <DialogTitle className="sr-only">{accountForm === "signup" ? "Create an account" : "Sign in"}</DialogTitle>
+            {accountForm && (
+              <AccountPanel
+                key={accountForm}
+                initialMode={accountForm}
+                onSignUp={signUp}
+                onSignIn={signIn}
+                onForgotPassword={requestPasswordReset}
+                onDone={(mode) => {
+                  setAccountForm(null);
+                  toast(mode === "signup"
+                    ? { title: "Account created", description: "You can now sign in on another device to see these reflections." }
+                    : { title: "Signed in", description: "Your reflections have been loaded." });
+                }}
+                onDismiss={() => setAccountForm(null)}
+              />
+            )}
+          </DialogContent>
+        </Dialog>
+  );
+
+  // Opened from the link in a password reset email. Shown on the welcome
+  // screen too, so a new password can be set without first allowing the microphone.
+  const passwordResetDialog = (
+        <Dialog open={passwordReset !== null} onOpenChange={(open) => { if (!open) dismissPasswordReset(); }}>
+          <DialogContent className="max-w-xl border-0 bg-transparent p-0 shadow-none">
+            <DialogTitle className="sr-only">Choose a new password</DialogTitle>
+            {passwordReset && (
+              <NewPasswordPanel
+                problem={passwordReset === "expired"}
+                onSave={setNewPassword}
+                onDone={() => toast({ title: "Password changed", description: "You are signed in. Use the new password next time." })}
+                onDismiss={dismissPasswordReset}
+                onAskAgain={() => { dismissPasswordReset(); setAccountForm("signin"); }}
+              />
+            )}
+          </DialogContent>
+        </Dialog>
+  );
+
   if (hasPermission === false) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-rose-50 via-purple-50 to-indigo-100 flex items-center justify-center p-6">
+        {accountDialog}
+        {passwordResetDialog}
         <Card className="w-full max-w-2xl shadow-2xl border-0 bg-white/90 backdrop-blur-xl">
           <CardHeader className="text-center pb-8 pt-12">
             <div className="relative mb-8">
@@ -2337,26 +2379,9 @@ export default function TalkToMyself() {
           } : undefined}
         />
 
-        <Dialog open={accountForm !== null} onOpenChange={(open) => { if (!open) setAccountForm(null); }}>
-          <DialogContent className="max-w-2xl border-0 bg-transparent p-0 shadow-none">
-            <DialogTitle className="sr-only">{accountForm === "signup" ? "Create an account" : "Sign in"}</DialogTitle>
-            {accountForm && (
-              <AccountPanel
-                key={accountForm}
-                initialMode={accountForm}
-                onSignUp={signUp}
-                onSignIn={signIn}
-                onDone={(mode) => {
-                  setAccountForm(null);
-                  toast(mode === "signup"
-                    ? { title: "Account created", description: "You can now sign in on another device to see these reflections." }
-                    : { title: "Signed in", description: "Your reflections have been loaded." });
-                }}
-                onDismiss={() => setAccountForm(null)}
-              />
-            )}
-          </DialogContent>
-        </Dialog>
+        {accountDialog}
+
+        {passwordResetDialog}
 
         {/* Error Warnings */}
         {speechRecognitionError && (
@@ -2592,7 +2617,19 @@ export default function TalkToMyself() {
                           </div>
                           <span className="font-medium">{processingStage}</span>
                         </div>
-                        <Progress value={progress} className="h-3 bg-white/50 rounded-full overflow-hidden" />
+                        <div
+                          role="progressbar"
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-valuenow={Math.round(progress)}
+                          aria-label="Processing your reflection"
+                          className="h-3 w-full overflow-hidden rounded-full bg-purple-100"
+                        >
+                          <div
+                            className="h-full rounded-full bg-gradient-to-r from-purple-500 via-pink-500 to-indigo-500 transition-[width] duration-300 ease-linear"
+                            style={{ width: `${Math.max(3, progress)}%` }}
+                          />
+                        </div>
                         {processingSecondsLeft !== null && progress < 100 && (
                           <p className="text-center text-sm text-gray-500" aria-live="polite">
                             {processingSecondsLeft > 1

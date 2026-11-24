@@ -9,13 +9,16 @@
 // allowance; otherwise the Gemini key shared with summaries and emotions.
 import { generateText } from 'ai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { geminiApiKey } from '@/lib/gemini-key';
+import { geminiApiKey, withGeminiBackup } from '@/lib/gemini-key';
 
 export const maxDuration = 30;
 
 // Vercel refuses request bodies over 4.5 MB before they reach this route.
 const MAX_BYTES = 4.2 * 1024 * 1024;
-const TIMEOUT_MS = 12000;
+// The page gives up at about the same time and uses the browser's transcript.
+const TIMEOUT_MS = 20000;
+// If the first model has not answered by now, the backup model is asked too.
+const BACKUP_AFTER_MS = 6000;
 const AUDIO_TYPES = ['audio/webm', 'audio/mp4', 'audio/ogg', 'audio/wav', 'audio/mpeg', 'audio/aac', 'audio/flac'];
 
 export async function POST(request: Request) {
@@ -37,11 +40,13 @@ export async function POST(request: Request) {
     const mediaType = AUDIO_TYPES.includes(stated) ? stated : 'audio/webm';
 
     const started = Date.now();
-    const { text } = await generateText({
-      model: createGoogleGenerativeAI({ apiKey })('gemini-3.6-flash'),
+    const google = createGoogleGenerativeAI({ apiKey });
+    const data = new Uint8Array(await audio.arrayBuffer());
+    const { text } = await withGeminiBackup((name, abortSignal) => generateText({
+      model: google(name),
       temperature: 0,
       maxRetries: 0,
-      abortSignal: AbortSignal.timeout(TIMEOUT_MS),
+      abortSignal,
       // Writing down what was said needs no reasoning step, and skipping it is faster.
       providerOptions: { google: { thinkingConfig: { thinkingBudget: 0 } } },
       messages: [{
@@ -57,10 +62,10 @@ Rules:
 - Do not describe sounds, add speaker names, or add timestamps.
 - If nobody speaks, return nothing at all.`,
           },
-          { type: 'file', data: new Uint8Array(await audio.arrayBuffer()), mediaType },
+          { type: 'file', data, mediaType },
         ],
       }],
-    });
+    }), { hedgeAfterMs: BACKUP_AFTER_MS, timeoutMs: TIMEOUT_MS });
 
     return Response.json({ transcript: (text || '').replace(/\s+/g, ' ').trim(), ms: Date.now() - started });
   } catch (error) {
