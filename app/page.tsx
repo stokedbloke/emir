@@ -102,6 +102,9 @@ export default function TalkToMyself() {
   // 🗑️ DEAD CODE: These audio analysis refs are created but the audio analysis is never displayed - can be removed
   const audioContextRef = useRef<AudioContext | null>(null)
   const currentAudioRef = useRef<HTMLAudioElement | null>(null)
+  // The summary text the kept audio was generated from, and its object URL.
+  const spokenTextRef = useRef<string | null>(null)
+  const currentAudioUrlRef = useRef<string | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const breathingTimerRef = useRef<NodeJS.Timeout | null>(null)
@@ -353,6 +356,9 @@ export default function TalkToMyself() {
   const [processingError, setProcessingError] = useState<string | null>(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isAudioReady, setIsAudioReady] = useState(false);
+  // The summary being prepared or read aloud, so the matching Listen button can show it.
+  const [listeningText, setListeningText] = useState<string | null>(null);
+  const [isPreparingAudio, setIsPreparingAudio] = useState(false);
   const [breathingPhase, setBreathingPhase] = useState<"inhale" | "exhale">("inhale");
   const [liveTranscript, setLiveTranscript] = useState("");
   const [showLiveTranscript, setShowLiveTranscript] = useState(true);
@@ -1818,9 +1824,38 @@ export default function TalkToMyself() {
       currentAudioRef.current.pause();
       currentAudioRef.current = null;
     }
+    if (currentAudioUrlRef.current) {
+      URL.revokeObjectURL(currentAudioUrlRef.current);
+      currentAudioUrlRef.current = null;
+    }
+    spokenTextRef.current = null;
     if (typeof window !== "undefined" && "speechSynthesis" in window) window.speechSynthesis.cancel();
     setIsSpeaking(false);
     setIsAudioReady(false);
+  };
+
+  // Read one reflection's summary aloud, from the Summary tab or the Reflections
+  // list. Audio is generated only when asked for, and the last one generated is
+  // kept so hearing the same summary again costs nothing.
+  const listenTo = async (session: SessionData) => {
+    if (!session.summary || isPreparingAudio) return;
+    if (isSpeaking) {
+      stopSpeech();
+      // Pressing the button of the reflection being read just stops it.
+      if (listeningText === session.summary) return;
+    }
+    setListeningText(session.summary);
+    if (spokenTextRef.current === session.summary && currentAudioRef.current) {
+      playAudio();
+      return;
+    }
+    discardGeneratedAudio();
+    setIsPreparingAudio(true);
+    try {
+      await speakSummary(session.summary);
+    } finally {
+      setIsPreparingAudio(false);
+    }
   };
 
   const chooseVoice = (voiceId: string) => {
@@ -2028,6 +2063,7 @@ export default function TalkToMyself() {
 
     // Set speaking state immediately
     setIsSpeaking(true);
+    setListeningText(summary);
 
     const ttsService = globalSettings.tts_service;
     // Add any additional settings (voice, lang, etc.) as needed
@@ -2040,20 +2076,26 @@ export default function TalkToMyself() {
         currentAudioRef.current = null;
       }
 
+      if (currentAudioUrlRef.current) URL.revokeObjectURL(currentAudioUrlRef.current);
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
 
-      // Store reference to current audio
+      // Store reference to current audio, and what it says, for replay
       currentAudioRef.current = audio;
+      currentAudioUrlRef.current = url;
+      spokenTextRef.current = summary;
 
       audio.onended = () => {
-        URL.revokeObjectURL(url);
-        // Don't clear currentAudioRef - keep it for replay
+        // Keep the audio and its URL for replay
         setIsSpeaking(false);
       };
       audio.onerror = () => {
         URL.revokeObjectURL(url);
-        currentAudioRef.current = null;
+        if (currentAudioRef.current === audio) {
+          currentAudioRef.current = null;
+          currentAudioUrlRef.current = null;
+          spokenTextRef.current = null;
+        }
         setIsSpeaking(false);
       };
 
@@ -2763,35 +2805,9 @@ export default function TalkToMyself() {
                         <Button
                           variant="outline"
                           onClick={() => {
-                            console.log('Listen button clicked, states:', { isSpeaking, isAudioReady, hasSummary: !!currentSession?.summary });
-                            if (isSpeaking) {
-                              // Stop current audio/speech
-                              console.log('Stopping current speech');
-                              stopSpeech();
-                            } else if (isAudioReady) {
-                              // Play the ready audio
-                              console.log('Playing ready audio');
-                              playAudio();
-                            } else {
-                              // Stop any current speech before starting new
-                              console.log('Starting new speech generation');
-                              if (speechSynthesis.speaking) {
-                                speechSynthesis.cancel();
-                              }
-                              // Clear any existing audio elements
-                              const existingAudio = document.querySelector('audio');
-                              if (existingAudio) {
-                                existingAudio.pause();
-                                existingAudio.remove();
-                              }
-                              // Reset speaking state and audio ready state
-                              setIsSpeaking(false);
-                              setIsAudioReady(false);
-                              // Start new speech
-                              speakSummary(currentSession.summary);
-                            }
+                            if (currentSession) listenTo(currentSession);
                           }}
-                          disabled={isProcessing || isRecording || !currentSession?.summary}
+                          disabled={isProcessing || isRecording || isPreparingAudio || !currentSession?.summary}
                           className={cn(
                             "flex items-center space-x-2 rounded-xl px-6 py-3 transition-all duration-300",
                             isSpeaking
@@ -2808,7 +2824,7 @@ export default function TalkToMyself() {
                             "font-medium",
                             isSpeaking ? "text-red-600" : "text-purple-600"
                           )}>
-                            {isSpeaking ? "Stop" : "Listen"}
+                            {isPreparingAudio ? "Preparing…" : isSpeaking ? "Stop" : "Listen"}
                           </span>
                         </Button>
 
@@ -3399,6 +3415,32 @@ export default function TalkToMyself() {
                               ))}
                             </div>
                           </div>
+                          {session.summary && !isUnsynthesized(session) && (() => {
+                            const active = listeningText === session.summary;
+                            const preparing = active && isPreparingAudio;
+                            const playing = active && isSpeaking && !isPreparingAudio;
+                            return (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={isRecording || isProcessing || isPreparingAudio}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  listenTo(session);
+                                }}
+                                aria-label={playing ? "Stop reading this reflection" : "Read this reflection aloud"}
+                                className={cn(
+                                  "mt-3 rounded-xl",
+                                  playing
+                                    ? "border-red-200 text-red-600 hover:bg-red-50"
+                                    : "border-purple-300 text-purple-700 hover:bg-purple-50",
+                                )}
+                              >
+                                {playing ? <MicOff className="mr-2 h-4 w-4" /> : <Volume2 className="mr-2 h-4 w-4" />}
+                                {preparing ? "Preparing…" : playing ? "Stop" : "Listen"}
+                              </Button>
+                            );
+                          })()}
                           <div className="text-xs text-gray-500 mt-1">
                             {(() => {
                               const transcriptWords = calculateWordCount(session.transcript || '');
