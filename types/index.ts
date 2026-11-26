@@ -48,12 +48,18 @@ export interface SessionData {
 // recording, "browser" is the browser's live speech recognition, "backup" is
 // Google Speech-to-Text (used only when both of the others gave nothing).
 export interface TranscriptionInfo {
-  source: "server" | "browser" | "backup"
+  // "mixed": recorded in pieces, some transcribed by the server and some
+  // filled in from the browser.
+  source: "server" | "browser" | "backup" | "mixed"
   server_ms: number
   server_words: number
   browser_words: number
   // Why the server transcript was not available: too_large, timeout, network, http_<status>.
   server_problem?: string
+  // For a recording made in pieces: how many, and how many of them used the
+  // browser's words because the server's were missing or too few.
+  pieces?: number
+  pieces_from_browser?: number
   // The transcript that was not used, kept so the two can be compared.
   other_transcript?: string
 }

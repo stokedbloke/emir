@@ -42,6 +42,7 @@ RULES:
 - Write as if you are the person is speaking about their own experience
 - Be specific and avoid generic statements
 - Capture all main points in a crisp, concise summary
+- However long the original is, use no more than about 400 words; for a long original keep the main points and leave out the detail
 - Do not add emotions, feelings, or interpretations not in the original
 - Make the person feel heard without judgement or advice
 - Maintain the same meaning and emotional tone
