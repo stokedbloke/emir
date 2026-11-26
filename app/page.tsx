@@ -51,6 +51,50 @@ const SERVER_TRANSCRIPT_MAX_WAIT_MS = 20000;
 // Speech stays clear at this rate, and about 10 minutes fits under the upload
 // limit. Browsers left to choose use two or three times as much.
 const RECORDING_BITS_PER_SECOND = 48000;
+// A reflection is also recorded as a run of short pieces, each sent for
+// transcription while the person is still speaking, so only the last piece is
+// left to transcribe when they finish and length is no longer limited by the
+// upload size. A piece ends at the first pause after the target length, or at
+// the limit when there is no pause.
+//
+// Each piece is one transcription request, and Gemini's free tier allows only
+// 20 a day per model, so pieces are long: a reflection under four minutes is
+// still a single request, and half an hour is eight. With a paid allowance a
+// target near 50 seconds leaves less to transcribe when the person finishes.
+const PIECE_TARGET_SECONDS = 240;
+const PIECE_LIMIT_SECONDS = 270;
+const PIECE_PAUSE_MS = 400;
+// Pieces are sent while the person is still speaking, so each can be given
+// much longer than the transcript of a finished recording.
+const PIECE_TRANSCRIPT_WAIT_MS = 55000;
+// After recording stops, how long to wait for pieces still being transcribed.
+const PIECES_FINAL_WAIT_BASE_MS = 8000;
+const PIECES_FINAL_WAIT_PER_SECOND_MS = 100;
+// Extra wait for a piece that has no browser transcript to fall back on.
+const PIECES_UNHEARD_WAIT_MS = 40000;
+// When the transcription allowance is used up, pieces are not sent for this long.
+const PIECES_QUOTA_PAUSE_MS = 5 * 60 * 1000;
+// Above this length the voice is measured from a few pieces, because decoding
+// the whole recording at once needs more memory than a phone has.
+const LONG_RECORDING_SECONDS = 300;
+
+type PieceResult = { transcript: string; ms: number; problem?: string };
+type RecordedPiece = {
+  blob: Blob | null;
+  seconds: number;
+  // Where this piece starts and ends in the browser's own transcript, in words
+  // (null: to the end), so a piece the server could not transcribe can be filled in.
+  browserWordsStart: number;
+  browserWordsEnd: number | null;
+  result: PieceResult | null;
+  done: Promise<void>;
+};
+const wordsIn = (text: string): string[] => (text.trim() ? text.trim().split(/\s+/) : []);
+// Up to `count` items spread evenly over the list, always including both ends.
+const spreadOver = <T,>(items: T[], count: number): T[] =>
+  items.length <= count
+    ? items
+    : Array.from({ length: count }, (_, index) => items[Math.round((index * (items.length - 1)) / (count - 1))]);
 import { API_ENDPOINTS, AUDIO_CONSTANTS, UI_CONSTANTS, DEFAULT_VALUES, SPEECH_TRIGGERS } from "@/constants";
 import { calculateWordCount, formatTime, getDeviceInfo, getBrowserInfo, playChime } from "@/utils";
 import { LoadingStates } from "@/components/LoadingStates";
@@ -99,6 +143,14 @@ export default function TalkToMyself() {
   const [utteranceRef, setUtteranceRef] = useState<SpeechSynthesisUtterance | null>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
+  // The short pieces of the current recording (see PIECE_TARGET_SECONDS).
+  const pieceRecorderRef = useRef<{ recorder: MediaRecorder; chunks: Blob[]; startedAt: number; browserWordsStart: number } | null>(null)
+  const piecesRef = useRef<RecordedPiece[]>([])
+  const piecesUsableRef = useRef(true)
+  const pieceMonitorRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const recordingMimeTypeRef = useRef("")
+  const pieceQuotaPausedUntilRef = useRef(0)
+  const wakeLockRef = useRef<any>(null)
   // 🗑️ DEAD CODE: These audio analysis refs are created but the audio analysis is never displayed - can be removed
   const audioContextRef = useRef<AudioContext | null>(null)
   const currentAudioRef = useRef<HTMLAudioElement | null>(null)
@@ -340,7 +392,9 @@ export default function TalkToMyself() {
     if (!isProcessing) { setProcessingSecondsLeft(null); return; }
     const started = Date.now();
     // Longer recordings take longer to transcribe and summarize.
-    const estimate = Math.min(45000, 8000 + currentRecordingTimeRef.current * 60);
+    // Recordings made in pieces are mostly transcribed already.
+    const inPieces = piecesUsableRef.current && piecesRef.current.length > 1;
+    const estimate = inPieces ? 15000 : Math.min(45000, 8000 + currentRecordingTimeRef.current * 60);
     const tick = () => {
       const elapsed = Date.now() - started;
       // Reaches about 85% at the estimate and keeps creeping after it.
@@ -645,6 +699,8 @@ export default function TalkToMyself() {
 
     // Clear audio chunks to free memory
     audioChunksRef.current = [];
+    stopPieces(false);
+    piecesRef.current = [];
 
     // Stop recognition and clear handlers defensively
     if (recognitionRef.current) {
@@ -748,6 +804,142 @@ export default function TalkToMyself() {
 
 
 
+  // === RECORDING IN PIECES ===
+  const browserTranscriptNow = () =>
+    `${fullRecognitionTranscriptRef.current} ${pendingRecognitionRef.current}`.replace(/\s+/g, " ").trim();
+
+  // A second recorder on the same microphone. The main recorder keeps the
+  // whole recording; this one is ended and restarted to make the pieces.
+  const startPieceRecorder = () => {
+    const stream = streamRef.current;
+    if (!stream) return;
+    try {
+      const mimeType = recordingMimeTypeRef.current;
+      const recorder = new MediaRecorder(stream, { ...(mimeType ? { mimeType } : {}), audioBitsPerSecond: RECORDING_BITS_PER_SECOND });
+      const chunks: Blob[] = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunks.push(event.data);
+      };
+      recorder.start();
+      pieceRecorderRef.current = { recorder, chunks, startedAt: Date.now(), browserWordsStart: wordsIn(browserTranscriptNow()).length };
+    } catch (error) {
+      // Without pieces the recording is handled whole, as a short one is.
+      console.warn("Could not record in pieces:", error);
+      pieceRecorderRef.current = null;
+      piecesUsableRef.current = false;
+    }
+  };
+
+  // Ends the current piece and sends it for transcription. Unless it is the
+  // last one, the next piece starts first so nothing is lost in between.
+  const endPiece = (last: boolean) => {
+    const current = pieceRecorderRef.current;
+    if (!current) return;
+    pieceRecorderRef.current = null;
+    if (!last) startPieceRecorder();
+    const { recorder, chunks } = current;
+    let finish: () => void = () => {};
+    const piece: RecordedPiece = {
+      blob: null,
+      seconds: (Date.now() - current.startedAt) / 1000,
+      browserWordsStart: current.browserWordsStart,
+      browserWordsEnd: last ? null : wordsIn(browserTranscriptNow()).length,
+      result: null,
+      done: new Promise<void>((resolve) => { finish = resolve; }),
+    };
+    recorder.onstop = async () => {
+      const blob = new Blob(chunks, { type: recorder.mimeType || AUDIO_CONSTANTS.MIME_TYPE });
+      piece.blob = blob;
+      piece.result = await transcribePiece(blob, recorder.mimeType);
+      finish();
+    };
+    piecesRef.current.push(piece);
+    try {
+      recorder.stop();
+    } catch (error) {
+      console.warn("Could not end a piece of the recording:", error);
+      piece.result = { transcript: "", ms: 0, problem: "recorder" };
+      finish();
+    }
+  };
+
+  // Watches the microphone level and ends each piece at a pause.
+  const startPieceMonitor = () => {
+    if (pieceMonitorRef.current) clearInterval(pieceMonitorRef.current);
+    let quietSince: number | null = null;
+    let loud = 0;
+    let samples: Uint8Array<ArrayBuffer> | null = null;
+    pieceMonitorRef.current = setInterval(() => {
+      const current = pieceRecorderRef.current;
+      if (!isRecordingRef.current || !current) return;
+      const now = Date.now();
+      const analyser = analyserRef.current;
+      // A suspended audio context reports silence, which says nothing about pauses.
+      const listening = !!analyser && audioContextRef.current?.state === "running";
+      let paused = false;
+      if (analyser && listening) {
+        if (!samples || samples.length !== analyser.fftSize) samples = new Uint8Array(analyser.fftSize);
+        analyser.getByteTimeDomainData(samples);
+        let sum = 0;
+        for (let i = 0; i < samples.length; i++) {
+          const value = (samples[i] - 128) / 128;
+          sum += value * value;
+        }
+        const level = Math.sqrt(sum / samples.length);
+        // Quiet is judged against how loud this person has recently been.
+        loud = Math.max(level, loud * 0.995);
+        quietSince = level < Math.max(0.004, loud * 0.15) ? (quietSince ?? now) : null;
+        paused = quietSince !== null && now - quietSince >= PIECE_PAUSE_MS;
+      }
+      const seconds = (now - current.startedAt) / 1000;
+      if (seconds >= PIECE_LIMIT_SECONDS || (seconds >= PIECE_TARGET_SECONDS && (paused || !listening))) {
+        endPiece(false);
+      }
+    }, 100);
+  };
+
+  // Stops making pieces. When the recording is being kept and at least one
+  // piece was already cut, what remains becomes the last piece; a recording
+  // shorter than one piece is handled whole instead.
+  const stopPieces = (keepRecording: boolean) => {
+    if (pieceMonitorRef.current) {
+      clearInterval(pieceMonitorRef.current);
+      pieceMonitorRef.current = null;
+    }
+    const current = pieceRecorderRef.current;
+    if (!current) return;
+    if (keepRecording && piecesUsableRef.current && piecesRef.current.length > 0) {
+      endPiece(true);
+      return;
+    }
+    pieceRecorderRef.current = null;
+    try {
+      current.recorder.ondataavailable = null;
+      current.recorder.stop();
+    } catch (error) {
+      console.warn("Could not stop the piece recorder:", error);
+    }
+  };
+
+  // Keeps a phone's screen on while recording: when it locks, recording stops.
+  const holdScreenAwake = (hold: boolean) => {
+    try {
+      if (hold) {
+        (navigator as any).wakeLock?.request("screen")
+          .then((lock: any) => {
+            if (isRecordingRef.current) wakeLockRef.current = lock;
+            else lock.release().catch(() => {});
+          })
+          .catch(() => {});
+      } else if (wakeLockRef.current) {
+        wakeLockRef.current.release().catch(() => {});
+        wakeLockRef.current = null;
+      }
+    } catch {
+      // Not supported here; recording works without it.
+    }
+  };
+
   const startRecording = async (mode: "new" | "follow-up" = "new") => {
   if (mode === "new") {
   followUpParentRef.current = null;
@@ -820,6 +1012,11 @@ export default function TalkToMyself() {
     // Reset recording time for new session
     currentRecordingTimeRef.current = 0
     audioChunksRef.current = []
+    stopPieces(false)
+    piecesRef.current = []
+    piecesUsableRef.current = true
+    // Pauses are found from the microphone level, which needs the audio context running.
+    audioContextRef.current?.resume().catch(() => {})
     console.log("Starting MediaRecorder with stream:", streamRef.current)
     console.log("Stream tracks:", streamRef.current.getTracks())
     console.log("Audio tracks:", streamRef.current.getAudioTracks())
@@ -838,6 +1035,7 @@ export default function TalkToMyself() {
     try {
       const recorder = new MediaRecorder(streamRef.current, { ...(mimeType ? { mimeType } : {}), audioBitsPerSecond: RECORDING_BITS_PER_SECOND });
       mediaRecorderRef.current = recorder
+      recordingMimeTypeRef.current = mimeType
       mediaRecorderRef.current.ondataavailable = (event) => {
         console.log("MediaRecorder ondataavailable:", event.data.size, "bytes")
         if (event.data.size > 0) {
@@ -854,6 +1052,9 @@ export default function TalkToMyself() {
         console.log("MediaRecorder started successfully")
         setIsRecording(true)
         isRecordingRef.current = true
+        startPieceRecorder()
+        startPieceMonitor()
+        holdScreenAwake(true)
         // Reset speech recognition error when starting a new recording
         setSpeechRecognitionError(null)
         playChime("start")
@@ -891,6 +1092,11 @@ export default function TalkToMyself() {
       releaseMicrophone();
       return;
     }
+
+    // The last piece is queued before the main recorder stops, so it is
+    // already known when processing starts.
+    stopPieces(true);
+    holdScreenAwake(false);
 
     try {
       mediaRecorderRef.current?.stop();
@@ -1063,7 +1269,7 @@ export default function TalkToMyself() {
 
   // Measures pauses, level, brightness and pitch in the recording. Loudness is judged relative to this
   // recording's own level, so a quiet microphone does not read as silence.
-  const analyzeVoice = async (audioBlob: Blob): Promise<{ durationSeconds: number; pauseRatio: number; longestPauseSeconds: number; levelDb: number; brightnessHz: number; pitchHz?: number; pitchVariationSemitones?: number } | null> => {
+  const analyzeVoice = async (audioBlob: Blob, maxPitchFrames = 1500): Promise<{ durationSeconds: number; pauseRatio: number; longestPauseSeconds: number; levelDb: number; brightnessHz: number; pitchHz?: number; pitchVariationSemitones?: number } | null> => {
     try {
       const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       const decodedAudio = await audioContext.decodeAudioData(await audioBlob.arrayBuffer());
@@ -1135,7 +1341,7 @@ export default function TalkToMyself() {
       const maxLag = Math.ceil(rate / 70);   // lowest pitch considered: 70 Hz
       const pitches: number[] = [];
       // At most ~1500 frames, spread evenly, so long recordings stay quick.
-      const stride = Math.max(2, Math.ceil(spokenFrames / 1500));
+      const stride = Math.max(2, Math.ceil(spokenFrames / maxPitchFrames));
       for (let frame = first; frame <= last; frame += stride) {
         if (levels[frame] < threshold) continue;
         const start = Math.floor((frame * frameSize) / step);
@@ -1186,6 +1392,34 @@ export default function TalkToMyself() {
       console.error("Voice analysis failed:", error);
       return null;
     }
+  };
+
+  // The same measurements for a long recording, taken from a few of its pieces
+  // one at a time and averaged by how much speech each held. Pauses that fall
+  // between two pieces are not counted, so the pause share reads slightly low.
+  const analyzeVoiceFromPieces = async (blobs: Blob[], totalSeconds: number) => {
+    const picked = spreadOver(blobs, 6);
+    const results: NonNullable<Awaited<ReturnType<typeof analyzeVoice>>>[] = [];
+    for (const blob of picked) {
+      const result = await analyzeVoice(blob, Math.ceil(1500 / picked.length));
+      if (result) results.push(result);
+    }
+    if (results.length === 0) return null;
+    const spoken = results.reduce((sum, result) => sum + result.durationSeconds, 0);
+    const average = (value: (result: typeof results[number]) => number) =>
+      results.reduce((sum, result) => sum + value(result) * result.durationSeconds, 0) / spoken;
+    const pitched = results.filter((result) => result.pitchHz && typeof result.pitchVariationSemitones === "number");
+    return {
+      durationSeconds: totalSeconds,
+      pauseRatio: average((result) => result.pauseRatio),
+      longestPauseSeconds: Math.max(...results.map((result) => result.longestPauseSeconds)),
+      levelDb: Math.round(average((result) => result.levelDb) * 10) / 10,
+      brightnessHz: Math.round(average((result) => result.brightnessHz)),
+      ...(pitched.length > 0 ? {
+        pitchHz: Math.round(pitched.reduce((sum, result) => sum + result.pitchHz!, 0) / pitched.length),
+        pitchVariationSemitones: Math.round((pitched.reduce((sum, result) => sum + result.pitchVariationSemitones!, 0) / pitched.length) * 10) / 10,
+      } : {}),
+    };
   };
 
   // Pace is words in the transcript divided by time. Returns null when the
@@ -1266,8 +1500,14 @@ export default function TalkToMyself() {
       // Process only essential analysis in parallel for immediate user experience
       // Move non-essential analysis (emotions, vocal characteristics) to background
       const startTime = Date.now();
+      // A long recording made in pieces is measured from those pieces; decoding
+      // all of it at once can exhaust a phone's memory.
+      const pieceBlobs = piecesUsableRef.current && piecesRef.current.length > 1
+        ? piecesRef.current.filter((piece) => piece.blob && piece.seconds >= 10).map((piece) => piece.blob as Blob)
+        : [];
+      const usePieces = pieceBlobs.length > 1 && currentRecordingTimeRef.current > LONG_RECORDING_SECONDS;
       const [pauses, summary] = await Promise.all([
-        analyzeVoice(audioBlob),
+        usePieces ? analyzeVoiceFromPieces(pieceBlobs, currentRecordingTimeRef.current) : analyzeVoice(audioBlob),
         generateSummary(transcript)
       ]);
       // Prefer the measured span of speech; fall back to the recording timer.
@@ -1292,7 +1532,7 @@ export default function TalkToMyself() {
       console.log(`Essential processing completed in ${processingTime}ms`);
 
       // Start emotion analysis in background - not needed for immediate user experience
-      const emotionPromise = analyzeEmotions(transcript, audioBlob).catch((err) => {
+      const emotionPromise = analyzeEmotions(transcript, audioBlob, usePieces ? spreadOver(pieceBlobs, 3) : undefined).catch((err) => {
         console.error("Emotion analysis failed:", err);
         return []; // Return empty array instead of undefined
       });
@@ -1338,7 +1578,11 @@ export default function TalkToMyself() {
         summary,
         emotions: [], // Will be populated when background analysis completes
         vocalCharacteristics,
-        audioBlob,
+        // Kept for making a voice clone, which has an upload limit: a recording
+        // over it offers its longest piece instead.
+        audioBlob: audioBlob.size > SERVER_TRANSCRIPT_MAX_BYTES && pieceBlobs.length > 0
+          ? pieceBlobs.reduce((longest, blob) => (blob.size > longest.size ? blob : longest))
+          : audioBlob,
         transcription: transcriptionInfoRef.current || undefined,
         // Store the actual duration from the red bubble timer
         recordingDuration: recordingDuration,
@@ -1447,18 +1691,19 @@ export default function TalkToMyself() {
 
   // Sends the recording to the server for transcription. Never throws: a
   // problem is reported so the caller can fall back to the browser transcript.
-  const serverTranscript = async (audioBlob: Blob): Promise<{ transcript: string; ms: number; problem?: string }> => {
+  const serverTranscript = async (audioBlob: Blob, options: { mimeType?: string; timeoutMs?: number; patient?: boolean } = {}): Promise<PieceResult> => {
     const started = Date.now();
     const done = (transcript: string, problem?: string) => ({ transcript, ms: Date.now() - started, problem });
     if (audioBlob.size > SERVER_TRANSCRIPT_MAX_BYTES) return done("", "too_large");
     try {
       const formData = new FormData();
       formData.append("audio", audioBlob, "recording");
-      formData.append("mimeType", mediaRecorderRef.current?.mimeType || audioBlob.type);
+      formData.append("mimeType", options.mimeType || audioBlob.type);
+      if (options.patient) formData.append("patient", "1");
       const response = await fetch(API_ENDPOINTS.TRANSCRIBE_AUDIO, {
         method: "POST",
         body: formData,
-        signal: AbortSignal.timeout(Math.min(
+        signal: AbortSignal.timeout(options.timeoutMs ?? Math.min(
           SERVER_TRANSCRIPT_MAX_WAIT_MS,
           SERVER_TRANSCRIPT_BASE_WAIT_MS + currentRecordingTimeRef.current * SERVER_TRANSCRIPT_WAIT_PER_SECOND_MS,
         )),
@@ -1472,16 +1717,115 @@ export default function TalkToMyself() {
     }
   };
 
+  // One piece, sent while recording continues. A failure is tried once more;
+  // an empty answer is not a failure, the piece may simply be silent.
+  const transcribePiece = async (blob: Blob, mimeType: string): Promise<PieceResult> => {
+    // Out of allowance: asking again only fails again, so the browser's words
+    // are used for this piece and the next few minutes of them.
+    if (Date.now() < pieceQuotaPausedUntilRef.current) return { transcript: "", ms: 0, problem: "http_429" };
+    const options = { mimeType, timeoutMs: PIECE_TRANSCRIPT_WAIT_MS, patient: true };
+    const first = await serverTranscript(blob, options);
+    if (!first.problem || first.problem === "too_large") return first;
+    if (first.problem === "http_429") {
+      pieceQuotaPausedUntilRef.current = Date.now() + PIECES_QUOTA_PAUSE_MS;
+      return first;
+    }
+    const second = await serverTranscript(blob, options);
+    if (second.problem === "http_429") pieceQuotaPausedUntilRef.current = Date.now() + PIECES_QUOTA_PAUSE_MS;
+    return { ...second, ms: first.ms + second.ms };
+  };
+
+  // Joins the transcripts of a recording made in pieces. A piece the server
+  // could not transcribe in time is filled with what the browser heard during
+  // it. Returns "" when nothing usable came back, so the caller can fall back
+  // to handling the recording whole.
+  const transcriptFromPieces = async (browserTranscript: string): Promise<string> => {
+    const pieces = piecesRef.current;
+    const started = Date.now();
+    const lastSeconds = pieces[pieces.length - 1].seconds;
+    await Promise.race([
+      Promise.all(pieces.map((piece) => piece.done)),
+      new Promise((resolve) => setTimeout(resolve, Math.min(
+        SERVER_TRANSCRIPT_MAX_WAIT_MS,
+        PIECES_FINAL_WAIT_BASE_MS + lastSeconds * PIECES_FINAL_WAIT_PER_SECOND_MS,
+      ))),
+    ]);
+
+    const browserWords = wordsIn(browserTranscript);
+    // A piece still being transcribed, for which the browser heard nothing
+    // (no speech recognition on this device), would simply be missing. Waiting
+    // longer is better than losing those words.
+    const unheard = pieces.filter((piece) => !piece.result
+      && browserWords.slice(piece.browserWordsStart, piece.browserWordsEnd ?? undefined).length === 0);
+    if (unheard.length > 0) {
+      await Promise.race([
+        Promise.all(unheard.map((piece) => piece.done)),
+        new Promise((resolve) => setTimeout(resolve, PIECES_UNHEARD_WAIT_MS)),
+      ]);
+    }
+    const problems = new Map<string, number>();
+    let serverWords = 0;
+    let fromServer = 0;
+    let fromBrowser = 0;
+    const parts = pieces.map((piece) => {
+      const heard = browserWords.slice(piece.browserWordsStart, piece.browserWordsEnd ?? undefined);
+      const server = piece.result?.transcript || "";
+      const words = wordsIn(server).length;
+      serverWords += words;
+      const problem = piece.result ? piece.result.problem : "timeout";
+      if (problem) problems.set(problem, (problems.get(problem) || 0) + 1);
+      // Same test as for a whole recording: the server can invent a few words from silence.
+      if (words > 0 && words >= heard.length * 0.6) {
+        fromServer++;
+        return server;
+      }
+      if (heard.length > 0) fromBrowser++;
+      return heard.join(" ");
+    });
+    const transcript = parts.filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+    const serverText = pieces.map((piece) => piece.result?.transcript || "").filter(Boolean).join(" ");
+    console.log("Recording transcribed in pieces:", {
+      pieces: pieces.length,
+      fromServer,
+      fromBrowser,
+      seconds: pieces.map((piece) => Math.round(piece.seconds)),
+      waitedMs: Date.now() - started,
+      problems: Object.fromEntries(problems),
+    });
+    if (!transcript) return "";
+    transcriptionInfoRef.current = {
+      source: fromBrowser === 0 ? "server" : fromServer === 0 ? "browser" : "mixed",
+      server_ms: Date.now() - started,
+      server_words: serverWords,
+      browser_words: browserWords.length,
+      pieces: pieces.length,
+      pieces_from_browser: fromBrowser,
+      ...(problems.size > 0 ? { server_problem: Array.from(problems, ([problem, count]) => `${problem} x${count}`).join(", ") } : {}),
+      ...(fromServer > 0
+        ? (browserTranscript ? { other_transcript: browserTranscript } : {})
+        : (serverText ? { other_transcript: serverText } : {})),
+    };
+    return transcript;
+  };
+
   const transcribeAudio = async (audioBlob: Blob): Promise<string> => {
     const browserTranscript = `${fullRecognitionTranscriptRef.current} ${pendingRecognitionRef.current}`
       .replace(/\s+/g, " ").trim() ||
       ((window as any).lastRecognitionTranscript || "").trim();
 
+    if (piecesUsableRef.current && piecesRef.current.length > 1) {
+      const transcript = await transcriptFromPieces(browserTranscript);
+      if (transcript) {
+        setTranscriptionError(null);
+        return transcript;
+      }
+    }
+
     // The server transcribes the recording itself. The browser's live speech
     // recognition is the fallback whenever the server fails, is slow, or returns
     // much less than the browser heard (it can invent a few words from silence).
     const browserWords = calculateWordCount(browserTranscript);
-    const server = await serverTranscript(audioBlob);
+    const server = await serverTranscript(audioBlob, { mimeType: recordingMimeTypeRef.current });
     const serverWords = calculateWordCount(server.transcript);
     const useServer = serverWords > 0 && serverWords >= browserWords * 0.6;
     transcriptionInfoRef.current = {
@@ -1724,7 +2068,9 @@ export default function TalkToMyself() {
     return Array.isArray(data.emotions) ? data.emotions : [];
   };
 
-  const analyzeEmotions = async (text: string, audioBlob?: Blob): Promise<EmotionAnalysis[]> => {
+  // clipSources: for a long recording, a few of its pieces to take the voice
+  // clips from (one from the middle of each) instead of decoding all of it.
+  const analyzeEmotions = async (text: string, audioBlob?: Blob, clipSources?: Blob[]): Promise<EmotionAnalysis[]> => {
     const combinedEmotions: EmotionAnalysis[] = [];
 
     try {
@@ -1751,7 +2097,17 @@ export default function TalkToMyself() {
     // Call Valence audio emotions API (if audio provided)
     if (audioBlob) {
       try {
-        const clips = await clipsForValence(audioBlob);
+        let clips: Blob[];
+        if (clipSources) {
+          // One piece at a time, to keep memory use down.
+          clips = [];
+          for (const source of clipSources) {
+            const found = await clipsForValence(source);
+            if (found.length > 0) clips.push(found[Math.floor(found.length / 2)]);
+          }
+        } else {
+          clips = await clipsForValence(audioBlob);
+        }
         const results = (await Promise.allSettled(clips.map(valenceEmotionsFor)))
           .filter((result): result is PromiseFulfilledResult<Array<{ emotion: string; confidence: number }>> =>
             result.status === "fulfilled" && result.value.length > 0)
@@ -3372,7 +3728,8 @@ export default function TalkToMyself() {
                               {isAdmin && session.transcription && (
                                 <details className="text-xs text-gray-400 mt-1" onClick={(e) => e.stopPropagation()}>
                                   <summary className="cursor-pointer">
-                                    Admin: transcript from {session.transcription.source === "server" ? "the server" : session.transcription.source === "browser" ? "the browser" : "backup speech-to-text"}
+                                    Admin: transcript from {session.transcription.source === "server" ? "the server" : session.transcription.source === "browser" ? "the browser" : session.transcription.source === "mixed" ? "the server and the browser" : "backup speech-to-text"}
+                                    {session.transcription.pieces ? ` · ${session.transcription.pieces} pieces${session.transcription.pieces_from_browser ? `, ${session.transcription.pieces_from_browser} filled in from the browser` : ""}` : ""}
                                     {" · "}server {(session.transcription.server_ms / 1000).toFixed(1)}s, {session.transcription.server_words} words
                                     {session.transcription.server_problem ? ` (${session.transcription.server_problem})` : ""}
                                     {" · "}browser {session.transcription.browser_words} words
